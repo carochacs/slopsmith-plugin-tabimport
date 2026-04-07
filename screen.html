@@ -1,0 +1,47 @@
+<div class="max-w-4xl mx-auto px-6 pt-24 pb-16">
+    <button onclick="showScreen('home')" class="text-gray-500 hover:text-white text-sm mb-6 flex items-center gap-1">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg> Back
+    </button>
+    <h2 class="text-3xl font-bold text-white mb-2">Import Guitar Pro Tab</h2>
+    <p class="text-gray-500 mb-8">Drop a .gp3, .gp4, or .gp5 file to convert it into playable CDLC with MIDI audio.</p>
+
+    <!-- Drop zone -->
+    <div id="ti-dropzone" class="border-2 border-dashed border-gray-700 rounded-2xl p-12 text-center mb-8 transition hover:border-accent/40 cursor-pointer">
+        <svg class="w-12 h-12 mx-auto mb-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+        <p class="text-gray-400 text-sm mb-2">Drag and drop a Guitar Pro file here</p>
+        <p class="text-gray-600 text-xs">or click to browse</p>
+        <input type="file" id="ti-file-input" accept=".gp3,.gp4,.gp5" class="hidden">
+    </div>
+
+    <!-- Parse results -->
+    <div id="ti-parsed" class="hidden">
+        <div class="bg-dark-700 border border-gray-800 rounded-xl p-5 mb-6">
+            <div class="grid grid-cols-3 gap-4 mb-4">
+                <div>
+                    <label class="text-xs text-gray-400 mb-1 block">Title</label>
+                    <input type="text" id="ti-title" class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 mb-1 block">Artist</label>
+                    <input type="text" id="ti-artist" class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 mb-1 block">Album</label>
+                    <input type="text" id="ti-album" class="w-full bg-dark-600 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-accent/50">
+                </div>
+            </div>
+            <h4 class="text-xs text-gray-400 mb-2">Tracks</h4>
+            <div id="ti-tracks" class="space-y-2"></div>
+        </div>
+        <button onclick="tiBuild()" class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">Build CDLC</button>
+    </div>
+
+    <!-- Build progress -->
+    <div id="ti-progress" class="hidden">
+        <div class="progress-bar mb-3"><div class="fill" id="ti-bar" style="width:0%"></div></div>
+        <p class="text-xs text-gray-500" id="ti-stage">Starting...</p>
+    </div>
+
+    <!-- Result -->
+    <div id="ti-result" class="hidden"></div>
+</div>
