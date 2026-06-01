@@ -3,14 +3,14 @@
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg> Back
     </button>
     <h2 class="text-3xl font-bold text-white mb-2">Import Guitar Pro Tab</h2>
-    <p class="text-gray-500 mb-8">Drop a .gp3, .gp4, or .gp5 file to convert it into playable CDLC with MIDI audio.</p>
+    <p class="text-gray-500 mb-8">Drop a .gp3, .gp4, .gp5, .gpx, or .gp file to convert it into playable CDLC.</p>
 
     <!-- Drop zone -->
     <div id="ti-dropzone" class="border-2 border-dashed border-gray-700 rounded-2xl p-12 text-center mb-8 transition hover:border-accent/40 cursor-pointer">
         <svg class="w-12 h-12 mx-auto mb-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
         <p class="text-gray-400 text-sm mb-2">Drag and drop a Guitar Pro file here</p>
-        <p class="text-gray-600 text-xs">or click to browse</p>
-        <input type="file" id="ti-file-input" accept=".gp3,.gp4,.gp5" class="hidden">
+        <p class="text-gray-600 text-xs">or click to browse — GP3, GP4, GP5, GPX, GP7/GP8</p>
+        <input type="file" id="ti-file-input" accept=".gp3,.gp4,.gp5,.gpx,.gp" class="hidden">
     </div>
 
     <!-- Parse results -->
@@ -33,7 +33,71 @@
             <h4 class="text-xs text-gray-400 mb-2">Tracks</h4>
             <div id="ti-tracks" class="space-y-2"></div>
         </div>
-        <button onclick="tiBuild()" class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">Build CDLC</button>
+
+        <!-- GP8 embedded audio banner (shown only when GP8 file has embedded audio) -->
+        <div id="ti-audio-banner" class="hidden mb-5 rounded-xl border border-accent/30 bg-accent/5 p-4">
+            <div class="flex items-start gap-3">
+                <svg class="w-5 h-5 text-accent mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/></svg>
+                <div class="flex-1">
+                    <p class="text-sm font-semibold text-white mb-1">Embedded audio detected</p>
+                    <p class="text-xs text-gray-400 mb-3">This GP8 file contains a backing track with <span id="ti-sync-count">0</span> sync point(s). You can use it as the CDLC audio instead of generating MIDI.</p>
+                    <div class="flex gap-2">
+                        <button onclick="tiSetAudioMode('embedded')" id="ti-btn-embedded"
+                            class="px-3 py-1.5 rounded-lg text-xs font-medium transition bg-accent text-white">
+                            Use embedded audio + sync
+                        </button>
+                        <button onclick="tiSetAudioMode('midi')" id="ti-btn-midi"
+                            class="px-3 py-1.5 rounded-lg text-xs font-medium transition bg-dark-600 text-gray-300 hover:bg-dark-500">
+                            Import chart only (MIDI audio)
+                        </button>
+                    </div>
+                    <p class="text-xs text-gray-600 mt-2">Sync quality depends on how carefully the tab was aligned to audio in Guitar Pro.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audio file drop zone (shown when no embedded audio, or user wants to supply their own) -->
+        <div id="ti-audio-section" class="hidden mb-5">
+            <div class="rounded-xl border border-gray-700 bg-dark-700/50 p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <div>
+                        <p class="text-sm font-semibold text-white">Audio file</p>
+                        <p class="text-xs text-gray-500">Supply a matching audio file for auto-sync, or skip to generate MIDI audio</p>
+                    </div>
+                    <button onclick="tiSkipAudio()" class="text-xs text-gray-500 hover:text-gray-300 transition">Skip — use MIDI</button>
+                </div>
+
+                <!-- Audio drop target -->
+                <div id="ti-audio-drop" role="button" tabindex="0" aria-label="Add audio file for auto-sync"
+                     class="border border-dashed border-gray-700 rounded-xl p-6 text-center cursor-pointer transition hover:border-accent/40 focus:outline-none focus:border-accent/60"
+                     onclick="document.getElementById('ti-audio-input').click()"
+                     onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('ti-audio-input').click();}"
+                     ondragover="event.preventDefault(); this.classList.add('border-accent/60','bg-accent/5')"
+                     ondragleave="this.classList.remove('border-accent/60','bg-accent/5')"
+                     ondrop="tiHandleAudioDrop(event)">
+                    <p class="text-gray-400 text-xs">Drop MP3 / OGG / WAV / FLAC here, or click to browse</p>
+                    <input type="file" id="ti-audio-input" accept=".mp3,.ogg,.wav,.flac,.m4a,.aac" class="hidden"
+                           onchange="tiHandleAudioFile(this.files[0])">
+                </div>
+
+                <!-- Audio file loaded state -->
+                <div id="ti-audio-loaded" class="hidden mt-3">
+                    <div class="flex items-center gap-3 px-3 py-2 bg-dark-600 rounded-lg">
+                        <svg class="w-4 h-4 text-accent shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/></svg>
+                        <span id="ti-audio-name" class="text-xs text-gray-300 flex-1 truncate"></span>
+                        <button onclick="tiClearAudio(true)" class="text-xs text-gray-600 hover:text-red-400 transition">✕</button>
+                    </div>
+                    <p class="text-xs text-gray-600 mt-2">Auto-sync will align the tab to this audio file automatically.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex gap-3 items-center">
+            <button onclick="tiBuild()" class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">Build CDLC</button>
+            <button id="ti-audio-toggle" onclick="tiToggleAudioSection()" class="text-xs text-gray-500 hover:text-gray-300 transition hidden">
+                + Add audio file for auto-sync
+            </button>
+        </div>
     </div>
 
     <!-- Build progress -->
