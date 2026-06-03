@@ -74,6 +74,107 @@ def _valid_gp_session_path(p: str):
 _SUPPORTED_EXTENSIONS = {'.gp3', '.gp4', '.gp5', '.gpx', '.gp'}
 
 
+def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, album, output_path):
+    """Pack arrangement XMLs + audio into a .sloppak zip (manifest.yaml + JSONs + stem)."""
+    import json
+    import xml.etree.ElementTree as ET
+    import zipfile
+    import yaml
+    from lib.song import parse_arrangement, arrangement_to_wire
+
+    work_dir = Path(tempfile.mkdtemp(prefix=_SESSION_PREFIX + "pack_"))
+    try:
+        arr_dir = work_dir / "arrangements"
+        stems_dir = work_dir / "stems"
+        arr_dir.mkdir()
+        stems_dir.mkdir()
+
+        audio_ext = Path(audio_path).suffix
+        shutil.copy2(audio_path, stems_dir / f"full{audio_ext}")
+
+        # Read songLength from first XML for the manifest duration field.
+        duration = 0.0
+        try:
+            root0 = ET.parse(xml_paths[0]).getroot()
+            sl = root0.get("songLength") or getattr(root0.find("songLength"), "text", None)
+            if sl:
+                duration = float(sl)
+        except Exception:
+            pass
+
+        arr_entries = []
+        used_ids: dict[str, int] = {}
+
+        for idx, (xml_path, name) in enumerate(zip(xml_paths, arrangement_names)):
+            arr = parse_arrangement(xml_path)
+            wire = arrangement_to_wire(arr)
+
+            if idx == 0:
+                # ebeats and sections live on Song (not Arrangement) so parse directly.
+                try:
+                    root = ET.parse(xml_path).getroot()
+                    eb_el = root.find("ebeats")
+                    if eb_el is not None:
+                        wire["ebeats"] = [
+                            {"time": float(e.get("time", 0)), "measure": int(e.get("measure", -1))}
+                            for e in eb_el.findall("ebeat")
+                        ]
+                    sec_el = root.find("sections")
+                    if sec_el is not None:
+                        wire["sections"] = [
+                            {
+                                "name": s.get("name", ""),
+                                "number": int(s.get("number", 0)),
+                                "startTime": float(s.get("startTime", 0)),
+                            }
+                            for s in sec_el.findall("section")
+                        ]
+                except Exception:
+                    pass
+
+            raw_id = re.sub(r"[^a-z0-9]", "", name.lower()) or f"arr{idx}"
+            count = used_ids.get(raw_id, 0)
+            used_ids[raw_id] = count + 1
+            arr_id = raw_id if count == 0 else f"{raw_id}{count + 1}"
+
+            (arr_dir / f"{arr_id}.json").write_text(
+                json.dumps(wire, ensure_ascii=False), encoding="utf-8"
+            )
+
+            tuning = list(arr.tuning) if hasattr(arr, "tuning") and arr.tuning else [0, 0, 0, 0, 0, 0]
+            capo = arr.capo if hasattr(arr, "capo") else 0
+
+            arr_entries.append({
+                "id": arr_id,
+                "name": name,
+                "file": f"arrangements/{arr_id}.json",
+                "tuning": tuning,
+                "capo": capo,
+            })
+
+        manifest = {
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "year": 0,
+            "duration": duration,
+            "stems": [{"id": "full", "file": f"stems/full{audio_ext}", "default": "on"}],
+            "arrangements": arr_entries,
+        }
+        (work_dir / "manifest.yaml").write_text(
+            yaml.dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
+
+        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(work_dir / "manifest.yaml", "manifest.yaml")
+            for f in arr_dir.iterdir():
+                zf.write(f, f"arrangements/{f.name}")
+            for f in stems_dir.iterdir():
+                zf.write(f, f"stems/{f.name}")
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def setup(app, context):
     global _get_dlc_dir, _extract_meta, _meta_db
     _get_dlc_dir = context["get_dlc_dir"]
@@ -403,24 +504,13 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
             # below routes around the MIDI step.
             from gp2rs import convert_file, auto_select_tracks, list_tracks
             from gp2midi import gp_to_audio
-            from cdlc_builder import build_cdlc
 
             if not track_indices:
                 auto_indices, name_map = auto_select_tracks(gp_path)
             else:
+                _, full_name_map = auto_select_tracks(gp_path)
+                name_map = {i: full_name_map.get(i, 'Lead') for i in track_indices}
                 auto_indices = track_indices
-                # Build name map from track names via list_tracks (GPX-safe)
-                name_map = {}
-                track_list = list_tracks(gp_path)
-                track_by_idx = {t['index']: t for t in track_list}
-                for i in auto_indices:
-                    name = track_by_idx.get(i, {}).get('name', '').lower()
-                    if 'bass' in name:
-                        name_map[i] = 'Bass'
-                    elif 'rhythm' in name:
-                        name_map[i] = 'Rhythm'
-                    else:
-                        name_map[i] = 'Lead'
 
             if not auto_indices:
                 _emit({"error": "No guitar/bass tracks found"})
@@ -533,13 +623,10 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
             _suffix = "_midi" if _is_midi else ""
             safe_t = re.sub(r'[<>:"/\\|?*]', '_', t_str)
             safe_a = re.sub(r'[<>:"/\\|?*]', '_', a_str)
-            output = str(dlc / f"{safe_t}_{safe_a}{_suffix}_p.psarc")
+            output = str(dlc / f"{safe_t}_{safe_a}{_suffix}.sloppak")
 
-            def on_progress(msg, pct):
-                report(msg, 60 + pct * 0.35)
-
-            report("Compiling SNG and packing PSARC...", 60)
-            build_cdlc(
+            report("Packing sloppak...", 60)
+            _build_sloppak(
                 xml_paths=xml_files,
                 arrangement_names=arr_names,
                 audio_path=build_audio_path,
@@ -547,7 +634,6 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 artist=a_str,
                 album=al_str,
                 output_path=output,
-                on_progress=on_progress,
             )
 
             # Cache metadata
