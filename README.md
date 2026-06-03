@@ -9,7 +9,7 @@ A plugin for [Slopsmith](https://github.com/byrongamatos/slopsmith) that lets yo
 - **Edit metadata** — change title, artist, album before building
 - **MIDI audio** — generates audio from the tab using FluidSynth
 - **Real-time progress** — shows build progress with stage descriptions
-- **One click build** — produces a complete PSARC file added to your library
+- **Output format choice** — choose Sloppak (all arrangements, default) or PSARC (max 3 arrangements: Lead/Rhythm/Bass)
 
 ## Installation
 
@@ -21,14 +21,26 @@ docker compose restart
 
 The "Import Tab" link will appear in the navigation bar.
 
+## Requirements
+
+MIDI audio generation requires FluidSynth and a soundfont file. On Windows, Slopsmith Desktop looks for a `.sf2` file in:
+
+```
+%APPDATA%\Slopsmith\soundfonts\
+```
+
+If no soundfont is found, the build will fail at the audio generation step. A free soundfont such as [GeneralUser GS](https://schristiancollins.com/generaluser.php) placed in that folder is sufficient.
+
+This can be bypassed by providing an audio file to sync.
+
 ## How It Works
 
 1. Drag a Guitar Pro file onto the drop zone (or click to browse)
 2. The file is parsed — title, artist, album, and tracks are shown
 3. Select which tracks to include, choose arrangements
-4. Click "Build CDLC"
-5. The plugin generates MIDI audio, converts to Rocksmith XML, compiles SNG, and packs into a PSARC
-6. The new song appears in your library
+4. Choose an output format: **Sloppak** (supports any number of arrangements) or **PSARC** (capped at Lead, Rhythm, and Bass)
+5. Click "Build CDLC"
+6. The plugin generates MIDI audio, converts to Rocksmith XML, and packs the output into your library
 
 ## Supported Formats
 
@@ -41,3 +53,4 @@ GP6 and GP7 are not supported (they use a different binary format).
 ## License
 
 MIT
+
