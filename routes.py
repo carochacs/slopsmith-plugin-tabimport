@@ -105,32 +105,46 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
         arr_entries = []
         used_ids: dict[str, int] = {}
 
+        # Extract ebeats and sections from whichever XML has them — Vocals XMLs
+        # carry no ebeats, so searching only idx==0 leaves beats empty when
+        # Vocals is first. Once found, copy to every arrangement's wire.
+        shared_ebeats: list | None = None
+        shared_sections: list | None = None
+        for _xml in xml_paths:
+            try:
+                _root = ET.parse(_xml).getroot()
+                _eb = _root.find("ebeats")
+                if _eb is not None:
+                    _beats = [
+                        {"time": float(e.get("time", 0)), "measure": int(e.get("measure", -1))}
+                        for e in _eb.findall("ebeat")
+                    ]
+                    if _beats:
+                        shared_ebeats = _beats
+                        _sec = _root.find("sections")
+                        if _sec is not None:
+                            shared_sections = [
+                                {
+                                    "name": s.get("name", ""),
+                                    "number": int(s.get("number", 0)),
+                                    "startTime": float(s.get("startTime", 0)),
+                                }
+                                for s in _sec.findall("section")
+                            ]
+                        break
+            except Exception:
+                pass
+
         for idx, (xml_path, name) in enumerate(zip(xml_paths, arrangement_names, strict=True)):
             arr = parse_arrangement(xml_path)
             wire = arrangement_to_wire(arr)
 
-            if idx == 0:
-                # ebeats and sections live on Song (not Arrangement) so parse directly.
-                try:
-                    root = ET.parse(xml_path).getroot()
-                    eb_el = root.find("ebeats")
-                    if eb_el is not None:
-                        wire["ebeats"] = [
-                            {"time": float(e.get("time", 0)), "measure": int(e.get("measure", -1))}
-                            for e in eb_el.findall("ebeat")
-                        ]
-                    sec_el = root.find("sections")
-                    if sec_el is not None:
-                        wire["sections"] = [
-                            {
-                                "name": s.get("name", ""),
-                                "number": int(s.get("number", 0)),
-                                "startTime": float(s.get("startTime", 0)),
-                            }
-                            for s in sec_el.findall("section")
-                        ]
-                except Exception:
-                    pass
+            # Inject shared ebeats/sections into every arrangement so the
+            # metronome and highway have rhythmic reference on all tracks.
+            if shared_ebeats:
+                wire["ebeats"] = shared_ebeats
+            if shared_sections:
+                wire["sections"] = shared_sections
 
             raw_id = re.sub(r"[^a-z0-9]", "", name.lower()) or f"arr{idx}"
             count = used_ids.get(raw_id, 0)
@@ -412,7 +426,8 @@ _ALLOWED_ARRANGEMENTS = {"Lead", "Rhythm", "Bass", "Drums", "Keys", "Vocals"}
 async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                        artist: str = "", album: str = "", tracks: str = "",
                        arrangements: str = "", audio_mode: str = "midi",
-                       audio_offset: float = 0.0, audio_tmp_path: str = ""):
+                       audio_offset: float = 0.0, audio_tmp_path: str = "",
+                       output_format: str = "sloppak"):
     """Build CDLC from an uploaded GP file with progress.
 
     audio_mode selects the backing track:
@@ -623,18 +638,38 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
             _suffix = "_midi" if _is_midi else ""
             safe_t = re.sub(r'[<>:"/\\|?*]', '_', t_str)
             safe_a = re.sub(r'[<>:"/\\|?*]', '_', a_str)
-            output = str(dlc / f"{safe_t}_{safe_a}{_suffix}.sloppak")
 
-            report("Packing sloppak...", 60)
-            _build_sloppak(
-                xml_paths=xml_files,
-                arrangement_names=arr_names,
-                audio_path=build_audio_path,
-                title=f"{t_str} (MIDI)" if _is_midi else t_str,
-                artist=a_str,
-                album=al_str,
-                output_path=output,
-            )
+            if output_format == "psarc":
+                # Truncate to max 3 arrangements, keeping Lead/Rhythm/Bass priority
+                from cdlc_builder import build_cdlc
+                _priority = {"Lead": 0, "Rhythm": 1, "Bass": 2}
+                paired = sorted(zip(arr_names, xml_files), key=lambda x: _priority.get(x[0], 99))
+                paired = paired[:3]
+                arr_names_out = [p[0] for p in paired]
+                xml_files_out = [p[1] for p in paired]
+                output = str(dlc / f"{safe_t}_{safe_a}{_suffix}_p.psarc")
+                report("Building PSARC...", 60)
+                build_cdlc(
+                    xml_paths=xml_files_out,
+                    arrangement_names=arr_names_out,
+                    audio_path=build_audio_path,
+                    title=f"{t_str} (MIDI)" if _is_midi else t_str,
+                    artist=a_str,
+                    album=al_str,
+                    output_path=output,
+                )
+            else:
+                output = str(dlc / f"{safe_t}_{safe_a}{_suffix}.sloppak")
+                report("Packing sloppak...", 60)
+                _build_sloppak(
+                    xml_paths=xml_files,
+                    arrangement_names=arr_names,
+                    audio_path=build_audio_path,
+                    title=f"{t_str} (MIDI)" if _is_midi else t_str,
+                    artist=a_str,
+                    album=al_str,
+                    output_path=output,
+                )
 
             # Cache metadata
             try:
