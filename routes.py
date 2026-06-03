@@ -135,7 +135,7 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             except Exception:
                 pass
 
-        for idx, (xml_path, name) in enumerate(zip(xml_paths, arrangement_names)):
+        for idx, (xml_path, name) in enumerate(zip(xml_paths, arrangement_names, strict=True)):
             arr = parse_arrangement(xml_path)
             wire = arrangement_to_wire(arr)
 
