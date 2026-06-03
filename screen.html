@@ -92,11 +92,24 @@
             </div>
         </div>
 
-        <div class="flex gap-3 items-center">
-            <button onclick="tiBuild()" class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">Build CDLC</button>
-            <button id="ti-audio-toggle" onclick="tiToggleAudioSection()" class="text-xs text-gray-500 hover:text-gray-300 transition hidden">
-                + Add audio file for auto-sync
-            </button>
+        <div class="flex flex-col gap-3">
+            <div class="flex items-center gap-3">
+                <label class="text-xs text-gray-400 shrink-0">Output format:</label>
+                <select id="ti-output-format" onchange="tiUpdateFormatWarning()"
+                    class="bg-dark-600 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-accent/50">
+                    <option value="sloppak">Sloppak (all arrangements, recommended)</option>
+                    <option value="psarc">PSARC (Rocksmith-compatible, max 3 arrangements)</option>
+                </select>
+            </div>
+            <div id="ti-psarc-warning" class="hidden text-xs text-yellow-400/80 bg-yellow-900/20 border border-yellow-800/30 rounded-lg px-3 py-2">
+                PSARC supports max 3 arrangements. Only Lead, Rhythm, and Bass tracks will be included.
+            </div>
+            <div class="flex gap-3 items-center">
+                <button onclick="tiBuild()" class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">Build CDLC</button>
+                <button id="ti-audio-toggle" onclick="tiToggleAudioSection()" class="text-xs text-gray-500 hover:text-gray-300 transition hidden">
+                    + Add audio file for auto-sync
+                </button>
+            </div>
         </div>
     </div>
 

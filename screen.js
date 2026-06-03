@@ -109,7 +109,7 @@ function tiShowParsed(data, filename) {
         ).join('');
         return `<div class="flex items-center gap-3 py-2 px-3 rounded-lg bg-dark-600/50">
             <input type="checkbox" data-track="${t.index}" ${checked}
-                class="ti-track-check accent-accent">
+                class="ti-track-check accent-accent" onchange="tiUpdateFormatWarning()">
             <span class="text-sm text-gray-300 flex-1">
                 ${badge ? `<span class="mr-1">${badge}</span>` : ''}${esc(t.name)}
                 <span class="text-gray-600">(${Number(t.strings) || 0} strings, ${Number(t.notes) || 0} notes)</span>
@@ -262,6 +262,20 @@ function tiClearAudio(revertMode = false) {
     }
 }
 
+// ── Format selector ──────────────────────────────────────────────────────────
+
+function tiUpdateFormatWarning() {
+    const fmt = document.getElementById('ti-output-format')?.value;
+    const warning = document.getElementById('ti-psarc-warning');
+    if (!warning) return;
+    if (fmt === 'psarc') {
+        const checks = document.querySelectorAll('.ti-track-check:checked');
+        warning.classList.toggle('hidden', checks.length <= 3);
+    } else {
+        warning.classList.add('hidden');
+    }
+}
+
 // ── Build ────────────────────────────────────────────────────────────────────
 
 async function tiBuild() {
@@ -284,6 +298,7 @@ async function tiBuild() {
     const title = document.getElementById('ti-title').value.trim();
     const artist = document.getElementById('ti-artist').value.trim();
     const album = document.getElementById('ti-album').value.trim();
+    const outputFormat = document.getElementById('ti-output-format')?.value || 'sloppak';
 
     document.getElementById('ti-parsed').classList.add('hidden');
     document.getElementById('ti-progress').classList.remove('hidden');
@@ -337,6 +352,7 @@ async function tiBuild() {
         tracks: trackIndices.join(','),
         arrangements,
         audio_mode: buildMode,
+        output_format: outputFormat,
     });
     // Autosync produced a server-side audio file + offset — hand them to the
     // build so it can use the real audio instead of MIDI synthesis.
