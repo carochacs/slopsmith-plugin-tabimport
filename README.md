@@ -9,7 +9,6 @@ A plugin for [Slopsmith](https://github.com/byrongamatos/slopsmith) that lets yo
 - **Edit metadata** — change title, artist, album before building
 - **MIDI audio** — generates audio from the tab using FluidSynth
 - **Real-time progress** — shows build progress with stage descriptions
-- **Output format choice** — choose Sloppak (all arrangements, default) or PSARC (max 3 arrangements: Lead/Rhythm/Bass)
 
 ## Installation
 
@@ -38,9 +37,8 @@ This can be bypassed by providing an audio file to sync.
 1. Drag a Guitar Pro file onto the drop zone (or click to browse)
 2. The file is parsed — title, artist, album, and tracks are shown
 3. Select which tracks to include, choose arrangements
-4. Choose an output format: **Sloppak** (supports any number of arrangements) or **PSARC** (capped at Lead, Rhythm, and Bass)
-5. Click "Build CDLC"
-6. The plugin generates MIDI audio, converts to Rocksmith XML, and packs the output into your library
+4. Click "Build CDLC"
+5. The plugin generates MIDI audio, converts to Rocksmith XML, and packs the output into your library as a `.sloppak` file
 
 ## Supported Formats
 
