@@ -426,8 +426,7 @@ _ALLOWED_ARRANGEMENTS = {"Lead", "Rhythm", "Bass", "Drums", "Keys", "Vocals"}
 async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                        artist: str = "", album: str = "", tracks: str = "",
                        arrangements: str = "", audio_mode: str = "midi",
-                       audio_offset: float = 0.0, audio_tmp_path: str = "",
-                       output_format: str = "sloppak"):
+                       audio_offset: float = 0.0, audio_tmp_path: str = ""):
     """Build CDLC from an uploaded GP file with progress.
 
     audio_mode selects the backing track:
@@ -639,37 +638,17 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
             safe_t = re.sub(r'[<>:"/\\|?*]', '_', t_str)
             safe_a = re.sub(r'[<>:"/\\|?*]', '_', a_str)
 
-            if output_format == "psarc":
-                # Truncate to max 3 arrangements, keeping Lead/Rhythm/Bass priority
-                from cdlc_builder import build_cdlc
-                _priority = {"Lead": 0, "Rhythm": 1, "Bass": 2}
-                paired = sorted(zip(arr_names, xml_files), key=lambda x: _priority.get(x[0], 99))
-                paired = paired[:3]
-                arr_names_out = [p[0] for p in paired]
-                xml_files_out = [p[1] for p in paired]
-                output = str(dlc / f"{safe_t}_{safe_a}{_suffix}_p.psarc")
-                report("Building PSARC...", 60)
-                build_cdlc(
-                    xml_paths=xml_files_out,
-                    arrangement_names=arr_names_out,
-                    audio_path=build_audio_path,
-                    title=f"{t_str} (MIDI)" if _is_midi else t_str,
-                    artist=a_str,
-                    album=al_str,
-                    output_path=output,
-                )
-            else:
-                output = str(dlc / f"{safe_t}_{safe_a}{_suffix}.sloppak")
-                report("Packing sloppak...", 60)
-                _build_sloppak(
-                    xml_paths=xml_files,
-                    arrangement_names=arr_names,
-                    audio_path=build_audio_path,
-                    title=f"{t_str} (MIDI)" if _is_midi else t_str,
-                    artist=a_str,
-                    album=al_str,
-                    output_path=output,
-                )
+            output = str(dlc / f"{safe_t}_{safe_a}{_suffix}.sloppak")
+            report("Packing sloppak...", 60)
+            _build_sloppak(
+                xml_paths=xml_files,
+                arrangement_names=arr_names,
+                audio_path=build_audio_path,
+                title=f"{t_str} (MIDI)" if _is_midi else t_str,
+                artist=a_str,
+                album=al_str,
+                output_path=output,
+            )
 
             # Cache metadata
             try:
@@ -678,7 +657,7 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 stat = out_path.stat()
                 _meta_db.put(out_path.name, stat.st_mtime, stat.st_size, meta)
             except Exception:
-                # The PSARC is already built; a cache-write miss is non-fatal
+                # The sloppak is already built; a cache-write miss is non-fatal
                 # (the scan repopulates it later), but log so it's visible.
                 _log.debug("tab_import: metadata cache write failed", exc_info=True)
 
