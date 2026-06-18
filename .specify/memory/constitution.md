@@ -8,12 +8,12 @@ This constitution lists Tab Import's own non-negotiables.
 
 ## Core Principles
 
-### I. Use the Slopsmith CDLC builder, not a parallel one
+### I. Use the Slopsmith pipeline, not a parallel one
 Tab Import depends on core modules `gp2rs`, `gp2midi` (the bundled
-`gp2midi.py` here is a thin local wrapper), `cdlc_builder`, and FluidSynth —
-the same pipeline used elsewhere in the ecosystem. The plugin MUST NOT fork
-its own SNG compiler or PSARC packer. If the core pipeline is missing, the
-plugin must fail loudly with a clear error.
+`gp2midi.py` here is a thin local wrapper), and FluidSynth — the same
+pipeline used elsewhere in the ecosystem. The plugin MUST NOT fork its own
+SNG compiler or packer. If the core pipeline is missing, the plugin must
+fail loudly with a clear error.
 
 ### II. Source format scope
 Only Guitar Pro 3, 4, 5 (`.gp3`, `.gp4`, `.gp5`) are accepted. GP6 / GP7 use
@@ -34,13 +34,13 @@ error. (See `analyze.md` for the known leak in some error paths.)
 
 ### V. Idempotent metadata cache update
 On successful build, `_meta_db.put(filename, mtime, size, meta)` is called.
-A throw here MUST NOT mark the build as failed — the PSARC was already
+A throw here MUST NOT mark the build as failed — the sloppak was already
 produced. Current code wraps the call in `try/except` and swallows errors.
 
 ### VI. Output filename safety
 Filenames are derived from `title + "_" + artist` with `re.sub(r'[<>:"/\\|?*]', '_', …)`
-plus a `_midi_p` suffix. Collisions overwrite. See open clarification on
-collision handling.
+plus an optional `_midi` suffix, and a `.sloppak` extension. Collisions
+overwrite. See open clarification on collision handling.
 
 ## Governance
 
