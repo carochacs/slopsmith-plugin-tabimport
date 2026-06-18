@@ -297,6 +297,10 @@ async def upload_tab(data: dict):
             "tmp_path": str(tmp),
             "has_embedded_audio": has_audio,
             "sync_point_count": sync_count,
+            # GP6/GP7/GP8 can't use MIDI synthesis (guitarpro.parse fails on
+            # .gpx/.gp). Flag this so the frontend can require audio before
+            # allowing the build.
+            "requires_audio": Path(filename).suffix.lower() in ('.gpx', '.gp'),
         }
 
     except Exception:

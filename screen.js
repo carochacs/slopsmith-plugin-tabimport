@@ -5,6 +5,7 @@ let _tiAudioB64 = null;
 let _tiAudioFilename = null;
 let _tiAudioMode = 'midi'; // 'embedded' | 'autosync' | 'midi'
 let _tiHasEmbedded = false;
+let _tiRequiresAudio = false; // true for GP6/GP7/GP8 — MIDI synthesis unsupported
 let _tiAudioOffset = 0;      // seconds; from /autosync (autosync mode)
 let _tiAudioTmpPath = null;  // server-side path to the synced audio (autosync mode)
 
@@ -79,6 +80,7 @@ async function tiHandleFile(file) {
 
             _tiTmpPath = data.tmp_path;
             _tiHasEmbedded = !!data.has_embedded_audio;
+            _tiRequiresAudio = !!data.requires_audio;
             _tiAudioMode = _tiHasEmbedded ? 'embedded' : 'midi';
             tiShowParsed(data, file.name);
         } catch (err) {
@@ -137,12 +139,39 @@ function tiShowParsed(data, filename) {
         // audio file switches the mode to 'autosync' and overrides embedded.
         audioToggle.classList.remove('hidden');
         tiSetAudioMode('embedded');
+    } else if (_tiRequiresAudio) {
+        // GP6/GP7/GP8 without embedded audio: MIDI synthesis is unsupported,
+        // so audio is required. Open the audio section immediately and disable
+        // the Build button until a file is attached.
+        banner.classList.add('hidden');
+        audioSection.classList.remove('hidden');
+        audioToggle.classList.add('hidden');
+        tiSetAudioMode('midi');
     } else {
         banner.classList.add('hidden');
         audioSection.classList.add('hidden');
         audioToggle.classList.remove('hidden');
         tiSetAudioMode('midi');
     }
+    tiUpdateBuildButton();
+}
+
+function tiUpdateBuildButton() {
+    const btn = document.querySelector('button[onclick="tiBuild()"]');
+    if (!btn) return;
+    const needsAudio = _tiRequiresAudio && _tiAudioMode !== 'autosync' && _tiAudioMode !== 'embedded';
+    btn.disabled = needsAudio;
+    btn.title = needsAudio ? 'Attach an audio file — MIDI synthesis is not supported for this format' : '';
+    btn.classList.toggle('opacity-40', needsAudio);
+    btn.classList.toggle('cursor-not-allowed', needsAudio);
+
+    // Adjust the audio section copy when audio is required (no "skip" option).
+    const hint = document.getElementById('ti-audio-hint');
+    const skip = document.getElementById('ti-skip-audio-btn');
+    if (hint) hint.textContent = _tiRequiresAudio
+        ? 'MIDI synthesis is not supported for GP6/GP7/GP8. Attach a matching audio file to continue.'
+        : 'Supply a matching audio file for auto-sync, or skip to generate MIDI audio';
+    if (skip) skip.classList.toggle('hidden', !!_tiRequiresAudio);
 }
 
 // ── Audio mode ───────────────────────────────────────────────────────────────
@@ -162,6 +191,7 @@ function tiSetAudioMode(mode) {
 
     // If user has an audio file loaded, clear it when switching to plain MIDI.
     if (mode === 'midi') tiClearAudio();
+    tiUpdateBuildButton();
 }
 
 function tiToggleAudioSection() {
@@ -398,6 +428,7 @@ function tiShowError(msg) {
 function tiReset() {
     _tiTmpPath = null;
     _tiHasEmbedded = false;
+    _tiRequiresAudio = false;
     // Clear audio payload + the loaded-file chip, then reset the mode.
     tiClearAudio();
     _tiAudioMode = 'midi';

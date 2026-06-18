@@ -62,9 +62,9 @@
                 <div class="flex items-center justify-between mb-3">
                     <div>
                         <p class="text-sm font-semibold text-white">Audio file</p>
-                        <p class="text-xs text-gray-500">Supply a matching audio file for auto-sync, or skip to generate MIDI audio</p>
+                        <p id="ti-audio-hint" class="text-xs text-gray-500">Supply a matching audio file for auto-sync, or skip to generate MIDI audio</p>
                     </div>
-                    <button onclick="tiSkipAudio()" class="text-xs text-gray-500 hover:text-gray-300 transition">Skip — use MIDI</button>
+                    <button id="ti-skip-audio-btn" onclick="tiSkipAudio()" class="text-xs text-gray-500 hover:text-gray-300 transition">Skip — use MIDI</button>
                 </div>
 
                 <!-- Audio drop target -->
