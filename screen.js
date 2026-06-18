@@ -329,15 +329,22 @@ async function tiBuild() {
             });
             const syncData = await syncResp.json();
             if (syncData.error) {
-                // Fallback to MIDI for this build only — don't abort, and
-                // don't disable autosync for future attempts.
-                setStage('Auto-sync failed, building with MIDI audio instead...', 20);
+                // Server couldn't save the audio at all (disk error, bad
+                // payload) — no file to use, fall back to MIDI for this run.
+                setStage('Audio upload failed, building with MIDI audio instead...', 20);
                 buildMode = 'midi';
             } else {
-                // Capture the sync result so the build can actually apply it.
+                // Capture the result so the build can use the real audio.
+                // sync_skipped means the file is kept but alignment failed;
+                // we still use the audio at offset 0 rather than falling back
+                // to MIDI synthesis.
                 _tiAudioOffset = syncData.audio_offset ?? 0;
                 _tiAudioTmpPath = syncData.audio_tmp_path || null;
-                setStage(`Synced: ${syncData.sync_point_count ?? 0} points, offset ${(syncData.audio_offset ?? 0).toFixed(3)}s`, 20);
+                if (syncData.sync_skipped) {
+                    setStage(`Using your audio without sync alignment — ${syncData.sync_skipped.split(';')[0]}`, 20);
+                } else {
+                    setStage(`Synced: ${syncData.sync_point_count ?? 0} points, offset ${(syncData.audio_offset ?? 0).toFixed(3)}s`, 20);
+                }
             }
         } catch (err) {
             setStage('Auto-sync failed, continuing with MIDI audio...', 20);

@@ -368,15 +368,34 @@ async def tab_autosync(data: dict):
     # Only a successful sync hands the audio to the build. Every error path must
     # remove the file here (it lives in the GP dir, so unlink the file — never
     # the dir, which still holds the GP file).
+    # _keep_audio gates the finally-block cleanup: True means the build
+    # endpoint owns the file and will remove it via the session-dir rmtree.
     _keep_audio = False
     try:
         try:
             from gp_autosync import auto_sync, is_available
         except ImportError:
-            return {"error": "Auto-sync is unavailable: the gp_autosync module (and its librosa dependency) isn't installed. Install the lyrics-karaoke plugin, or run: pip install librosa"}
+            # gp_autosync / librosa not installed. Keep the audio and return it
+            # at offset 0 so the build uses real audio without time alignment,
+            # rather than silently discarding the file and falling back to MIDI.
+            _keep_audio = True
+            return {
+                "audio_tmp_path": str(audio_tmp),
+                "audio_offset": 0.0,
+                "sync_point_count": 0,
+                "sync_points": [],
+                "sync_skipped": "Auto-sync not available (gp_autosync/librosa not installed); audio will play without time alignment.",
+            }
 
         if not is_available():
-            return {"error": "Auto-sync is unavailable: gp_autosync's librosa dependency isn't installed. Install the lyrics-karaoke plugin, or run: pip install librosa"}
+            _keep_audio = True
+            return {
+                "audio_tmp_path": str(audio_tmp),
+                "audio_offset": 0.0,
+                "sync_point_count": 0,
+                "sync_points": [],
+                "sync_skipped": "Auto-sync not available (gp_autosync/librosa not installed); audio will play without time alignment.",
+            }
 
         def on_progress(stage, pct):
             # /autosync is a one-shot HTTP call (no streaming channel); the
@@ -408,14 +427,23 @@ async def tab_autosync(data: dict):
         }
 
     except Exception:
-        # Log the detail server-side; return a generic message so internal
-        # paths / library internals don't leak to the client.
-        _log.exception("tab_import auto-sync failed")
-        return {"error": "Auto-sync failed. See server logs for details."}
+        # Sync algorithm failed at runtime. Log detail server-side. Keep the
+        # audio and return it at offset 0 — same degraded-success contract as
+        # the missing-library paths above — so the build uses real audio rather
+        # than discarding the file and falling back to MIDI synthesis.
+        _log.exception("tab_import auto-sync failed; keeping audio at offset 0")
+        _keep_audio = True
+        return {
+            "audio_tmp_path": str(audio_tmp),
+            "audio_offset": 0.0,
+            "sync_point_count": 0,
+            "sync_points": [],
+            "sync_skipped": "Auto-sync failed; audio will play without time alignment.",
+        }
     finally:
-        # Keep the file only on success (the build consumes it, and the GP
-        # dir cleanup removes it). On error, unlink just the audio file — the
-        # parent dir still holds the uploaded GP file.
+        # Keep the file only when the build will consume it (and remove it via
+        # the session-dir rmtree). On disk-write errors the file was never
+        # created, so unlink is a no-op.
         if not _keep_audio:
             audio_tmp.unlink(missing_ok=True)
 
