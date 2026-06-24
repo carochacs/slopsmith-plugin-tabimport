@@ -74,7 +74,68 @@ def _valid_gp_session_path(p: str):
 _SUPPORTED_EXTENSIONS = {'.gp3', '.gp4', '.gp5', '.gpx', '.gp'}
 
 
-def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, album, output_path):
+def _extract_lyrics_gp5(gp_path: str, track_idx: int) -> list | None:
+    """Extract timestamped lyrics from a GP3/4/5 vocal track.
+
+    Walks the track's beats and collects beat.text syllables with their
+    calculated start time and duration.  Returns a list of
+    {"t": float, "d": float, "w": str} dicts (matching the sloppak
+    lyrics.json format), or None when no text is found or parsing fails.
+
+    Only works for GP3/GP4/GP5 (.gp3/.gp4/.gp5) — guitarpro.parse()
+    rejects .gpx/.gp, so callers should guard on the file extension.
+    """
+    try:
+        import guitarpro
+        song = guitarpro.parse(gp_path)
+        if track_idx < 0 or track_idx >= len(song.tracks):
+            return None
+        track = song.tracks[track_idx]
+
+        words: list[dict] = []
+        current_time = 0.0
+        bpm = song.tempo  # initial BPM; updated per-beat via MixTableChange
+
+        for header, measure in zip(song.measureHeaders, track.measures):
+            bpm = header.tempo.value
+            for beat in measure.voices[0].beats:
+                # Duration in quarter-note units, honouring dots and tuplets.
+                dur = beat.duration
+                qn = 4.0 / dur.value           # e.g. value=8 → 0.5 qn (eighth)
+                if dur.isDotted:
+                    qn *= 1.5
+                elif getattr(dur, 'isDoubleDotted', False):
+                    qn *= 1.75
+                tup = dur.tuplet
+                if tup.enters != tup.times:
+                    qn *= tup.times / tup.enters
+
+                beat_secs = qn * 60.0 / bpm
+
+                # Mid-beat tempo change (MixTableChange) takes effect from the
+                # next beat, so update bpm after computing this beat's duration.
+                mtc = getattr(getattr(beat, 'effect', None), 'mixTableChange', None)
+                if mtc and getattr(getattr(mtc, 'tempo', None), 'value', 0) > 0:
+                    bpm = mtc.tempo.value
+
+                text = getattr(getattr(beat, 'text', None), 'value', '') or ''
+                if text:
+                    words.append({
+                        "t": round(current_time, 3),
+                        "d": round(beat_secs, 3),
+                        "w": text,
+                    })
+
+                current_time += beat_secs
+
+        return words if words else None
+    except Exception:
+        _log.debug("tab_import: lyrics extraction failed", exc_info=True)
+        return None
+
+
+def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, album,
+                   output_path, lyrics=None):
     """Pack arrangement XMLs + audio into a .sloppak zip (manifest.yaml + JSONs + stem)."""
     import json
     import xml.etree.ElementTree as ET
@@ -175,6 +236,13 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             "stems": [{"id": "full", "file": f"stems/full{audio_ext}", "default": "on"}],
             "arrangements": arr_entries,
         }
+        if lyrics is not None:
+            (work_dir / "lyrics.json").write_text(
+                json.dumps(lyrics, ensure_ascii=False), encoding="utf-8"
+            )
+            manifest["lyrics"] = "lyrics.json"
+            manifest["lyrics_source"] = "gp"
+
         (work_dir / "manifest.yaml").write_text(
             yaml.dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
         )
@@ -185,6 +253,8 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
                 zf.write(f, f"arrangements/{f.name}")
             for f in stems_dir.iterdir():
                 zf.write(f, f"stems/{f.name}")
+            if lyrics is not None:
+                zf.write(work_dir / "lyrics.json", "lyrics.json")
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -597,13 +667,30 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 build_audio_path = gp_to_audio(gp_path, midi_out)
                 effective_offset = 0.0
 
+            # Separate vocals tracks before XML conversion — they become
+            # lyrics.json rather than playable arrangements.
+            vocal_track_indices = [
+                auto_indices[i] for i, n in enumerate(arr_names) if n == "Vocals"
+            ]
+            non_vocal_auto = [idx for idx, n in zip(auto_indices, arr_names) if n != "Vocals"]
+            non_vocal_names = {i: name_map[i] for i in non_vocal_auto}
+            non_vocal_arr_names = [name_map.get(i, "Lead") for i in non_vocal_auto]
+
             report("Converting to Rocksmith XML...", 50)
             xml_dir = tempfile.mkdtemp()
             _register_cleanup(xml_dir)
             xml_files = convert_file(gp_path, xml_dir,
-                                     track_indices=auto_indices,
+                                     track_indices=non_vocal_auto,
                                      audio_offset=effective_offset,
-                                     arrangement_names=name_map)
+                                     arrangement_names=non_vocal_names)
+            arr_names = non_vocal_arr_names
+
+            # Extract timestamped lyrics from the first vocals track (GP3/4/5
+            # only — guitarpro.parse can't read .gpx/.gp).
+            lyrics_data = None
+            if vocal_track_indices and Path(gp_path).suffix.lower() not in ('.gpx', '.gp'):
+                report("Extracting lyrics...", 55)
+                lyrics_data = _extract_lyrics_gp5(gp_path, vocal_track_indices[0])
 
             # Metadata: read the file's embedded title/artist/album, then let
             # any user-supplied field override it per-field. (Overriding only
@@ -652,6 +739,7 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 artist=a_str,
                 album=al_str,
                 output_path=output,
+                lyrics=lyrics_data,
             )
 
             # Cache metadata
@@ -670,6 +758,7 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 "filename": Path(output).name,
                 "tracks": ", ".join(arr_names),
                 "audio_mode": effective_mode,
+                "lyrics_count": len(lyrics_data) if lyrics_data else 0,
             })
 
         except Exception:
