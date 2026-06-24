@@ -134,6 +134,103 @@ def _extract_lyrics_gp5(gp_path: str, track_idx: int) -> list | None:
         return None
 
 
+def _extract_sections_gp5(gp_path: str, audio_offset: float = 0.0) -> list | None:
+    """Extract section markers from a GP3/4/5 file via measure-header markers."""
+    try:
+        import guitarpro
+        song = guitarpro.parse(gp_path)
+        bpm = float(song.tempo)
+        current_time = 0.0
+        sections = []
+        for header in song.measureHeaders:
+            bpm = float(header.tempo.value)
+            marker = getattr(header, 'marker', None)
+            if marker and getattr(marker, 'title', ''):
+                sections.append({
+                    "name": marker.title,
+                    "number": len(sections) + 1,
+                    "startTime": round(current_time + audio_offset, 3),
+                })
+            ts = header.timeSignature
+            beats = ts.numerator * (4.0 / ts.denominator)
+            current_time += beats * 60.0 / bpm
+        return sections or None
+    except Exception:
+        _log.debug("tab_import: GP5 section extraction failed", exc_info=True)
+        return None
+
+
+def _extract_sections_gpif(gp_path: str, audio_offset: float = 0.0) -> list | None:
+    """Extract section markers from a GP6/GP7/GP8 file via GPIF XML MasterBars."""
+    try:
+        from gp2rs_gpx import _load_gpif
+        root = _load_gpif(gp_path)
+        sections = []
+        current_time = 0.0
+        bpm = 120.0
+        for mb in root.findall('MasterBars/MasterBar'):
+            tempo_val = mb.findtext('Tempo/Value')
+            if tempo_val:
+                bpm = float(tempo_val)
+            sec_el = mb.find('Section')
+            if sec_el is not None:
+                text = (sec_el.findtext('Text') or sec_el.get('text', '')).strip()
+                if text:
+                    sections.append({
+                        "name": text,
+                        "number": len(sections) + 1,
+                        "startTime": round(current_time + audio_offset, 3),
+                    })
+            ts_text = mb.findtext('Time') or ''
+            if '/' in ts_text:
+                num, den = ts_text.split('/', 1)
+                beats = int(num.strip()) * (4.0 / int(den.strip()))
+            else:
+                beats = 4.0
+            current_time += beats * 60.0 / bpm
+        return sections or None
+    except Exception:
+        _log.debug("tab_import: GPIF section extraction failed", exc_info=True)
+        return None
+
+
+def _merge_rs_xmls(primary_xml: str, secondary_xmls: list) -> str:
+    """Merge note-bearing elements from secondary RS XMLs into the primary XML.
+
+    Combines <notes>, <chords>, and <handShapes> child elements from each
+    secondary into the primary and re-sorts them by time.  The primary file is
+    overwritten in place; its path is returned for convenience.
+    """
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(primary_xml)
+    root = tree.getroot()
+
+    for sec_xml in secondary_xmls:
+        try:
+            sec_root = ET.parse(sec_xml).getroot()
+            for tag in ('notes', 'chords', 'handShapes'):
+                sec_cont = sec_root.find(tag)
+                if sec_cont is None or len(sec_cont) == 0:
+                    continue
+                pri_cont = root.find(tag)
+                if pri_cont is None:
+                    root.append(sec_cont)
+                else:
+                    for child in list(sec_cont):
+                        pri_cont.append(child)
+        except Exception:
+            _log.debug("tab_import: XML merge skipped for %s", sec_xml, exc_info=True)
+
+    for tag in ('notes', 'chords', 'handShapes'):
+        cont = root.find(tag)
+        if cont is not None and len(cont) > 0:
+            cont[:] = sorted(cont, key=lambda e: float(e.get('time', 0)))
+
+    tree.write(primary_xml, encoding='unicode', xml_declaration=False)
+    return primary_xml
+
+
 def _extract_lyrics_gpif(gp_path: str, vocals_track_idx: int) -> list | None:
     """Extract timestamped lyrics from a GP6/GP7/GP8 vocal track via GPIF XML.
 
@@ -217,7 +314,13 @@ def _extract_lyrics_gpif(gp_path: str, vocals_track_idx: int) -> list | None:
 
 
 
-    """Pack arrangement XMLs + audio into a .sloppak zip (manifest.yaml + JSONs + stem)."""
+def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, album,
+                   output_path, lyrics=None, extra_sections=None):
+    """Pack arrangement XMLs + audio into a .sloppak zip (manifest.yaml + JSONs + stem).
+
+    extra_sections: fallback sections list (from GP markers) used when the
+    Rocksmith XMLs carry no <sections> element of their own.
+    """
     import json
     import xml.etree.ElementTree as ET
     import zipfile
@@ -276,6 +379,10 @@ def _extract_lyrics_gpif(gp_path: str, vocals_track_idx: int) -> list | None:
                         break
             except Exception:
                 pass
+
+        # Fall back to GP-marker sections when the XML carries none.
+        if not shared_sections and extra_sections:
+            shared_sections = extra_sections
 
         for idx, (xml_path, name) in enumerate(zip(xml_paths, arrangement_names, strict=True)):
             arr = parse_arrangement(xml_path)
@@ -609,7 +716,8 @@ _ALLOWED_ARRANGEMENTS = {"Lead", "Rhythm", "Bass", "Drums", "Keys", "Vocals"}
 async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                        artist: str = "", album: str = "", tracks: str = "",
                        arrangements: str = "", audio_mode: str = "midi",
-                       audio_offset: float = 0.0, audio_tmp_path: str = ""):
+                       audio_offset: float = 0.0, audio_tmp_path: str = "",
+                       combine: int = 0):
     """Build CDLC from an uploaded GP file with progress.
 
     audio_mode selects the backing track:
@@ -800,6 +908,23 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                                      arrangement_names=name_map)
             arr_names = non_vocal_arr_names
 
+            # Combine same-name arrangements when requested.  Track indices
+            # with the same arrangement name are merged into one XML so that
+            # Songsterr-style tone-change tracks become a single playable part.
+            if combine:
+                from collections import OrderedDict
+                groups: dict[str, list] = OrderedDict()
+                for xml_f, nm in zip(xml_files, arr_names):
+                    groups.setdefault(nm, []).append(xml_f)
+                merged_xmls, merged_names = [], []
+                for nm, files in groups.items():
+                    if len(files) > 1:
+                        _merge_rs_xmls(files[0], files[1:])
+                    merged_xmls.append(files[0])
+                    merged_names.append(nm)
+                xml_files = merged_xmls
+                arr_names = merged_names
+
             # Extract timestamped lyrics from the first vocals track.
             # GP3/4/5: use pyguitarpro (0-based index = 1-based gp2rs idx - 1).
             # GP6/7/8 (.gpx/.gp): use the GPIF XML beat graph parser.
@@ -811,6 +936,15 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                     lyrics_data = _extract_lyrics_gpif(gp_path, vocal_auto_indices[0])
                 else:
                     lyrics_data = _extract_lyrics_gp5(gp_path, vocal_auto_indices[0] - 1)
+
+            # Extract GP section markers to inject into the sloppak when gp2rs
+            # produces no <sections> element (common for Songsterr exports).
+            gp_sections = None
+            _ext = Path(gp_path).suffix.lower()
+            if _ext in ('.gpx', '.gp'):
+                gp_sections = _extract_sections_gpif(gp_path, effective_offset)
+            else:
+                gp_sections = _extract_sections_gp5(gp_path, effective_offset)
 
             # Metadata: read the file's embedded title/artist/album, then let
             # any user-supplied field override it per-field. (Overriding only
@@ -860,6 +994,7 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 album=al_str,
                 output_path=output,
                 lyrics=lyrics_data,
+                extra_sections=gp_sections,
             )
 
             # Cache metadata

@@ -368,12 +368,14 @@ async function tiBuild() {
     }
 
     // Build via WebSocket
+    const combine = document.getElementById('ti-combine')?.checked ? 1 : 0;
     const params = new URLSearchParams({
         tmp_path: _tiTmpPath,
         title, artist, album,
         tracks: trackIndices.join(','),
         arrangements,
         audio_mode: buildMode,
+        combine,
     });
     // Autosync produced a server-side audio file + offset — hand them to the
     // build so it can use the real audio instead of MIDI synthesis.
@@ -431,6 +433,8 @@ function tiReset() {
     _tiTmpPath = null;
     _tiHasEmbedded = false;
     _tiRequiresAudio = false;
+    const _cb = document.getElementById('ti-combine');
+    if (_cb) _cb.checked = false;
     // Clear audio payload + the loaded-file chip, then reset the mode.
     tiClearAudio();
     _tiAudioMode = 'midi';
