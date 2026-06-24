@@ -242,14 +242,22 @@ def _extract_lyrics_gpif(gp_path: str, vocals_track_idx: int) -> list | None:
         from gp2rs_gpx import _load_gpif
         root = _load_gpif(gp_path)
 
-        # Beat pool: id → {duration_value, text}
+        # Beat pool: id → {duration_value, dot_count, tup_num, tup_den, text}
         beats_pool: dict[str, dict] = {}
         for b in root.findall('Beats/Beat'):
             bid = b.get('id')
             if bid is None:
                 continue
+            dot_el = b.find('Dot')
+            dot_count = int(dot_el.get('count', 0)) if dot_el is not None else 0
+            tup_el = b.find('Tuplet')
+            tup_num = int(tup_el.findtext('Num') or 1) if tup_el is not None else 1
+            tup_den = int(tup_el.findtext('Den') or 1) if tup_el is not None else 1
             beats_pool[bid] = {
                 'dur': float(b.findtext('Duration') or 4),
+                'dot_count': dot_count,
+                'tup_num': tup_num,
+                'tup_den': tup_den,
                 'text': (b.findtext('FreeText') or '').strip(),
             }
 
@@ -298,6 +306,12 @@ def _extract_lyrics_gpif(gp_path: str, vocals_track_idx: int) -> list | None:
                     continue
                 # GPIF Duration: 4 = quarter note (same denominator convention as guitarpro)
                 qn = 4.0 / beat['dur']
+                if beat['dot_count'] == 1:
+                    qn *= 1.5
+                elif beat['dot_count'] == 2:
+                    qn *= 1.75
+                if beat['tup_num'] != beat['tup_den'] and beat['tup_den'] > 0:
+                    qn *= beat['tup_den'] / beat['tup_num']
                 beat_secs = qn * 60.0 / bpm
                 if beat['text']:
                     words.append({
