@@ -401,6 +401,8 @@ async function tiBuild() {
                     <p class="text-green-400 font-semibold mb-1">CDLC Created!</p>
                     <p class="text-sm text-gray-400">${esc(msg.filename)}</p>
                     <p class="text-xs text-gray-500 mt-1">Tracks: ${esc(msg.tracks)}</p>
+                    ${msg.lyrics_count > 0
+                        ? `<p class="text-xs text-accent/70 mt-1">✓ Lyrics extracted (${msg.lyrics_count} words)</p>` : ''}
                     ${msg.audio_mode === 'embedded' || msg.audio_mode === 'autosync'
                         ? `<p class="text-xs text-accent/70 mt-1">✓ Real audio used — no MIDI synthesis</p>` : ''}
                     <button onclick="tiReset()" class="mt-4 px-4 py-2 bg-dark-600 hover:bg-dark-500 rounded-xl text-sm text-gray-300 transition">Import Another</button>
