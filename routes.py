@@ -697,28 +697,34 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
 
             # Separate vocals tracks before XML conversion — they become
             # lyrics.json rather than playable arrangements.
-            vocal_track_indices = [
-                auto_indices[i] for i, n in enumerate(arr_names) if n == "Vocals"
-            ]
-            non_vocal_auto = [idx for idx, n in zip(auto_indices, arr_names) if n != "Vocals"]
-            non_vocal_names = {i: name_map[i] for i in non_vocal_auto}
-            non_vocal_arr_names = [name_map.get(i, "Lead") for i in non_vocal_auto]
+            vocal_auto_indices = [ai for ai, n in zip(auto_indices, arr_names) if n == "Vocals"]
 
             report("Converting to Rocksmith XML...", 50)
             xml_dir = tempfile.mkdtemp()
             _register_cleanup(xml_dir)
             xml_files = convert_file(gp_path, xml_dir,
-                                     track_indices=non_vocal_auto,
+                                     track_indices=auto_indices,
                                      audio_offset=effective_offset,
-                                     arrangement_names=non_vocal_names)
-            arr_names = non_vocal_arr_names
+                                     arrangement_names=name_map)
+
+            # Filter vocals out of the arrangement list after conversion.
+            # gp2rs returns xml_files in the same order as auto_indices.
+            non_vocal_pairs = [(xf, n) for xf, n in zip(xml_files, arr_names) if n != "Vocals"]
+            if non_vocal_pairs:
+                xml_files = [p[0] for p in non_vocal_pairs]
+                arr_names = [p[1] for p in non_vocal_pairs]
+            # If the user selected ONLY a vocals track, keep it in arrangements
+            # as a fallback so the build still produces something playable.
+            # (Lyrics will still be extracted alongside it.)
 
             # Extract timestamped lyrics from the first vocals track (GP3/4/5
             # only — guitarpro.parse can't read .gpx/.gp).
+            # gp2rs uses 1-based track indices; pyguitarpro song.tracks is
+            # 0-based, so subtract 1 when indexing into song.tracks.
             lyrics_data = None
-            if vocal_track_indices and Path(gp_path).suffix.lower() not in ('.gpx', '.gp'):
+            if vocal_auto_indices and Path(gp_path).suffix.lower() not in ('.gpx', '.gp'):
                 report("Extracting lyrics...", 55)
-                lyrics_data = _extract_lyrics_gp5(gp_path, vocal_track_indices[0])
+                lyrics_data = _extract_lyrics_gp5(gp_path, vocal_auto_indices[0] - 1)
 
             # Metadata: read the file's embedded title/artist/album, then let
             # any user-supplied field override it per-field. (Overriding only
