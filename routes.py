@@ -134,8 +134,89 @@ def _extract_lyrics_gp5(gp_path: str, track_idx: int) -> list | None:
         return None
 
 
-def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, album,
-                   output_path, lyrics=None):
+def _extract_lyrics_gpif(gp_path: str, vocals_track_idx: int) -> list | None:
+    """Extract timestamped lyrics from a GP6/GP7/GP8 vocal track via GPIF XML.
+
+    Mirrors _extract_lyrics_gp5 but works on the GPIF beat graph instead of
+    pyguitarpro objects. vocals_track_idx is the 1-based gp2rs track index.
+    Returns {"t", "d", "w"} dicts or None.
+    """
+    try:
+        from gp2rs_gpx import _load_gpif
+        root = _load_gpif(gp_path)
+
+        # Beat pool: id → {duration_value, text}
+        beats_pool: dict[str, dict] = {}
+        for b in root.findall('Beats/Beat'):
+            bid = b.get('id')
+            if bid is None:
+                continue
+            beats_pool[bid] = {
+                'dur': float(b.findtext('Duration') or 4),
+                'text': (b.findtext('FreeText') or '').strip(),
+            }
+
+        # Voice pool: id → ordered beat-id list
+        voices_pool: dict[str, list[str]] = {}
+        for v in root.findall('Voices/Voice'):
+            vid = v.get('id')
+            if vid is None:
+                continue
+            voices_pool[vid] = [
+                bref.get('ref') for bref in v.findall('Beats/Beat')
+                if bref.get('ref')
+            ]
+
+        # Bar pool: id → first-voice-id
+        bars_pool: dict[str, str] = {}
+        for bar in root.findall('Bars/Bar'):
+            bid = bar.get('id')
+            vref = bar.find('Voices/Voice')
+            if bid and vref is not None and vref.get('ref'):
+                bars_pool[bid] = vref.get('ref')
+
+        # Walk MasterBars in order; select the bar for this track (0-based).
+        track_bar_idx = vocals_track_idx - 1  # gp2rs is 1-based
+        words: list[dict] = []
+        current_time = 0.0
+        bpm = 120.0
+
+        for mb in root.findall('MasterBars/MasterBar'):
+            tempo_val = mb.findtext('Tempo/Value')
+            if tempo_val:
+                bpm = float(tempo_val)
+
+            bar_refs = mb.findall('Bars/Bar')
+            if track_bar_idx >= len(bar_refs):
+                continue
+            bar_ref = bar_refs[track_bar_idx].get('ref')
+            if not bar_ref or bar_ref not in bars_pool:
+                continue
+            voice_id = bars_pool[bar_ref]
+            beat_ids = voices_pool.get(voice_id, [])
+
+            for bid in beat_ids:
+                beat = beats_pool.get(bid)
+                if beat is None:
+                    continue
+                # GPIF Duration: 4 = quarter note (same denominator convention as guitarpro)
+                qn = 4.0 / beat['dur']
+                beat_secs = qn * 60.0 / bpm
+                if beat['text']:
+                    words.append({
+                        "t": round(current_time, 3),
+                        "d": round(beat_secs, 3),
+                        "w": beat['text'],
+                    })
+                current_time += beat_secs
+
+        return words if words else None
+    except Exception:
+        _log.debug("tab_import: GPIF lyrics extraction failed", exc_info=True)
+        return None
+
+
+
     """Pack arrangement XMLs + audio into a .sloppak zip (manifest.yaml + JSONs + stem)."""
     import json
     import xml.etree.ElementTree as ET
@@ -695,36 +776,41 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 build_audio_path = gp_to_audio(gp_path, midi_out)
                 effective_offset = 0.0
 
-            # Separate vocals tracks before XML conversion — they become
-            # lyrics.json rather than playable arrangements.
+            # Separate vocals tracks BEFORE XML conversion — convert_file
+            # silently drops vocals for .gp/.gpx files, which would corrupt the
+            # zip(xml_files, arr_names) alignment if we passed them through.
             vocal_auto_indices = [ai for ai, n in zip(auto_indices, arr_names) if n == "Vocals"]
+            non_vocal_auto = [ai for ai, n in zip(auto_indices, arr_names) if n != "Vocals"]
+            non_vocal_arr_names = [n for n in arr_names if n != "Vocals"]
+
+            # If the user selected ONLY vocals, keep the track in arrangements
+            # as a fallback so the build still produces something playable.
+            if not non_vocal_auto:
+                non_vocal_auto = auto_indices
+                non_vocal_arr_names = arr_names
 
             report("Converting to Rocksmith XML...", 50)
             xml_dir = tempfile.mkdtemp()
             _register_cleanup(xml_dir)
+            # Pass full name_map so gp2rs can resolve arrangement names for any
+            # track index it knows about; only non_vocal_auto are converted.
             xml_files = convert_file(gp_path, xml_dir,
-                                     track_indices=auto_indices,
+                                     track_indices=non_vocal_auto,
                                      audio_offset=effective_offset,
                                      arrangement_names=name_map)
+            arr_names = non_vocal_arr_names
 
-            # Filter vocals out of the arrangement list after conversion.
-            # gp2rs returns xml_files in the same order as auto_indices.
-            non_vocal_pairs = [(xf, n) for xf, n in zip(xml_files, arr_names) if n != "Vocals"]
-            if non_vocal_pairs:
-                xml_files = [p[0] for p in non_vocal_pairs]
-                arr_names = [p[1] for p in non_vocal_pairs]
-            # If the user selected ONLY a vocals track, keep it in arrangements
-            # as a fallback so the build still produces something playable.
-            # (Lyrics will still be extracted alongside it.)
-
-            # Extract timestamped lyrics from the first vocals track (GP3/4/5
-            # only — guitarpro.parse can't read .gpx/.gp).
-            # gp2rs uses 1-based track indices; pyguitarpro song.tracks is
-            # 0-based, so subtract 1 when indexing into song.tracks.
+            # Extract timestamped lyrics from the first vocals track.
+            # GP3/4/5: use pyguitarpro (0-based index = 1-based gp2rs idx - 1).
+            # GP6/7/8 (.gpx/.gp): use the GPIF XML beat graph parser.
             lyrics_data = None
-            if vocal_auto_indices and Path(gp_path).suffix.lower() not in ('.gpx', '.gp'):
+            if vocal_auto_indices:
+                ext = Path(gp_path).suffix.lower()
                 report("Extracting lyrics...", 55)
-                lyrics_data = _extract_lyrics_gp5(gp_path, vocal_auto_indices[0] - 1)
+                if ext in ('.gpx', '.gp'):
+                    lyrics_data = _extract_lyrics_gpif(gp_path, vocal_auto_indices[0])
+                else:
+                    lyrics_data = _extract_lyrics_gp5(gp_path, vocal_auto_indices[0] - 1)
 
             # Metadata: read the file's embedded title/artist/album, then let
             # any user-supplied field override it per-field. (Overriding only
