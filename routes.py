@@ -74,7 +74,68 @@ def _valid_gp_session_path(p: str):
 _SUPPORTED_EXTENSIONS = {'.gp3', '.gp4', '.gp5', '.gpx', '.gp'}
 
 
-def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, album, output_path):
+def _extract_lyrics_gp5(gp_path: str, track_idx: int) -> list | None:
+    """Extract timestamped lyrics from a GP3/4/5 vocal track.
+
+    Walks the track's beats and collects beat.text syllables with their
+    calculated start time and duration.  Returns a list of
+    {"t": float, "d": float, "w": str} dicts (matching the sloppak
+    lyrics.json format), or None when no text is found or parsing fails.
+
+    Only works for GP3/GP4/GP5 (.gp3/.gp4/.gp5) — guitarpro.parse()
+    rejects .gpx/.gp, so callers should guard on the file extension.
+    """
+    try:
+        import guitarpro
+        song = guitarpro.parse(gp_path)
+        if track_idx < 0 or track_idx >= len(song.tracks):
+            return None
+        track = song.tracks[track_idx]
+
+        words: list[dict] = []
+        current_time = 0.0
+        bpm = song.tempo  # initial BPM; updated per-beat via MixTableChange
+
+        for header, measure in zip(song.measureHeaders, track.measures):
+            bpm = header.tempo.value
+            for beat in measure.voices[0].beats:
+                # Duration in quarter-note units, honouring dots and tuplets.
+                dur = beat.duration
+                qn = 4.0 / dur.value           # e.g. value=8 → 0.5 qn (eighth)
+                if dur.isDotted:
+                    qn *= 1.5
+                elif getattr(dur, 'isDoubleDotted', False):
+                    qn *= 1.75
+                tup = dur.tuplet
+                if tup.enters != tup.times:
+                    qn *= tup.times / tup.enters
+
+                beat_secs = qn * 60.0 / bpm
+
+                # Mid-beat tempo change (MixTableChange) takes effect from the
+                # next beat, so update bpm after computing this beat's duration.
+                mtc = getattr(getattr(beat, 'effect', None), 'mixTableChange', None)
+                if mtc and getattr(getattr(mtc, 'tempo', None), 'value', 0) > 0:
+                    bpm = mtc.tempo.value
+
+                text = getattr(getattr(beat, 'text', None), 'value', '') or ''
+                if text:
+                    words.append({
+                        "t": round(current_time, 3),
+                        "d": round(beat_secs, 3),
+                        "w": text,
+                    })
+
+                current_time += beat_secs
+
+        return words if words else None
+    except Exception:
+        _log.debug("tab_import: lyrics extraction failed", exc_info=True)
+        return None
+
+
+def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, album,
+                   output_path, lyrics=None):
     """Pack arrangement XMLs + audio into a .sloppak zip (manifest.yaml + JSONs + stem)."""
     import json
     import xml.etree.ElementTree as ET
@@ -175,6 +236,13 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             "stems": [{"id": "full", "file": f"stems/full{audio_ext}", "default": "on"}],
             "arrangements": arr_entries,
         }
+        if lyrics is not None:
+            (work_dir / "lyrics.json").write_text(
+                json.dumps(lyrics, ensure_ascii=False), encoding="utf-8"
+            )
+            manifest["lyrics"] = "lyrics.json"
+            manifest["lyrics_source"] = "gp"
+
         (work_dir / "manifest.yaml").write_text(
             yaml.dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
         )
@@ -185,6 +253,8 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
                 zf.write(f, f"arrangements/{f.name}")
             for f in stems_dir.iterdir():
                 zf.write(f, f"stems/{f.name}")
+            if lyrics is not None:
+                zf.write(work_dir / "lyrics.json", "lyrics.json")
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -297,6 +367,10 @@ async def upload_tab(data: dict):
             "tmp_path": str(tmp),
             "has_embedded_audio": has_audio,
             "sync_point_count": sync_count,
+            # GP6/GP7/GP8 can't use MIDI synthesis (guitarpro.parse fails on
+            # .gpx/.gp). Flag this so the frontend can require audio before
+            # allowing the build.
+            "requires_audio": Path(filename).suffix.lower() in ('.gpx', '.gp'),
         }
 
     except Exception:
@@ -368,15 +442,34 @@ async def tab_autosync(data: dict):
     # Only a successful sync hands the audio to the build. Every error path must
     # remove the file here (it lives in the GP dir, so unlink the file — never
     # the dir, which still holds the GP file).
+    # _keep_audio gates the finally-block cleanup: True means the build
+    # endpoint owns the file and will remove it via the session-dir rmtree.
     _keep_audio = False
     try:
         try:
             from gp_autosync import auto_sync, is_available
         except ImportError:
-            return {"error": "Auto-sync is unavailable: the gp_autosync module (and its librosa dependency) isn't installed. Install the lyrics-karaoke plugin, or run: pip install librosa"}
+            # gp_autosync / librosa not installed. Keep the audio and return it
+            # at offset 0 so the build uses real audio without time alignment,
+            # rather than silently discarding the file and falling back to MIDI.
+            _keep_audio = True
+            return {
+                "audio_tmp_path": str(audio_tmp),
+                "audio_offset": 0.0,
+                "sync_point_count": 0,
+                "sync_points": [],
+                "sync_skipped": "Auto-sync not available (gp_autosync/librosa not installed); audio will play without time alignment.",
+            }
 
         if not is_available():
-            return {"error": "Auto-sync is unavailable: gp_autosync's librosa dependency isn't installed. Install the lyrics-karaoke plugin, or run: pip install librosa"}
+            _keep_audio = True
+            return {
+                "audio_tmp_path": str(audio_tmp),
+                "audio_offset": 0.0,
+                "sync_point_count": 0,
+                "sync_points": [],
+                "sync_skipped": "Auto-sync not available (gp_autosync/librosa not installed); audio will play without time alignment.",
+            }
 
         def on_progress(stage, pct):
             # /autosync is a one-shot HTTP call (no streaming channel); the
@@ -408,14 +501,23 @@ async def tab_autosync(data: dict):
         }
 
     except Exception:
-        # Log the detail server-side; return a generic message so internal
-        # paths / library internals don't leak to the client.
-        _log.exception("tab_import auto-sync failed")
-        return {"error": "Auto-sync failed. See server logs for details."}
+        # Sync algorithm failed at runtime. Log detail server-side. Keep the
+        # audio and return it at offset 0 — same degraded-success contract as
+        # the missing-library paths above — so the build uses real audio rather
+        # than discarding the file and falling back to MIDI synthesis.
+        _log.exception("tab_import auto-sync failed; keeping audio at offset 0")
+        _keep_audio = True
+        return {
+            "audio_tmp_path": str(audio_tmp),
+            "audio_offset": 0.0,
+            "sync_point_count": 0,
+            "sync_points": [],
+            "sync_skipped": "Auto-sync failed; audio will play without time alignment.",
+        }
     finally:
-        # Keep the file only on success (the build consumes it, and the GP
-        # dir cleanup removes it). On error, unlink just the audio file — the
-        # parent dir still holds the uploaded GP file.
+        # Keep the file only when the build will consume it (and remove it via
+        # the session-dir rmtree). On disk-write errors the file was never
+        # created, so unlink is a no-op.
         if not _keep_audio:
             audio_tmp.unlink(missing_ok=True)
 
@@ -593,6 +695,10 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 build_audio_path = gp_to_audio(gp_path, midi_out)
                 effective_offset = 0.0
 
+            # Separate vocals tracks before XML conversion — they become
+            # lyrics.json rather than playable arrangements.
+            vocal_auto_indices = [ai for ai, n in zip(auto_indices, arr_names) if n == "Vocals"]
+
             report("Converting to Rocksmith XML...", 50)
             xml_dir = tempfile.mkdtemp()
             _register_cleanup(xml_dir)
@@ -600,6 +706,25 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                                      track_indices=auto_indices,
                                      audio_offset=effective_offset,
                                      arrangement_names=name_map)
+
+            # Filter vocals out of the arrangement list after conversion.
+            # gp2rs returns xml_files in the same order as auto_indices.
+            non_vocal_pairs = [(xf, n) for xf, n in zip(xml_files, arr_names) if n != "Vocals"]
+            if non_vocal_pairs:
+                xml_files = [p[0] for p in non_vocal_pairs]
+                arr_names = [p[1] for p in non_vocal_pairs]
+            # If the user selected ONLY a vocals track, keep it in arrangements
+            # as a fallback so the build still produces something playable.
+            # (Lyrics will still be extracted alongside it.)
+
+            # Extract timestamped lyrics from the first vocals track (GP3/4/5
+            # only — guitarpro.parse can't read .gpx/.gp).
+            # gp2rs uses 1-based track indices; pyguitarpro song.tracks is
+            # 0-based, so subtract 1 when indexing into song.tracks.
+            lyrics_data = None
+            if vocal_auto_indices and Path(gp_path).suffix.lower() not in ('.gpx', '.gp'):
+                report("Extracting lyrics...", 55)
+                lyrics_data = _extract_lyrics_gp5(gp_path, vocal_auto_indices[0] - 1)
 
             # Metadata: read the file's embedded title/artist/album, then let
             # any user-supplied field override it per-field. (Overriding only
@@ -648,6 +773,7 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 artist=a_str,
                 album=al_str,
                 output_path=output,
+                lyrics=lyrics_data,
             )
 
             # Cache metadata
@@ -666,6 +792,7 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 "filename": Path(output).name,
                 "tracks": ", ".join(arr_names),
                 "audio_mode": effective_mode,
+                "lyrics_count": len(lyrics_data) if lyrics_data else 0,
             })
 
         except Exception:

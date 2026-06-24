@@ -5,6 +5,7 @@ let _tiAudioB64 = null;
 let _tiAudioFilename = null;
 let _tiAudioMode = 'midi'; // 'embedded' | 'autosync' | 'midi'
 let _tiHasEmbedded = false;
+let _tiRequiresAudio = false; // true for GP6/GP7/GP8 — MIDI synthesis unsupported
 let _tiAudioOffset = 0;      // seconds; from /autosync (autosync mode)
 let _tiAudioTmpPath = null;  // server-side path to the synced audio (autosync mode)
 
@@ -79,6 +80,7 @@ async function tiHandleFile(file) {
 
             _tiTmpPath = data.tmp_path;
             _tiHasEmbedded = !!data.has_embedded_audio;
+            _tiRequiresAudio = !!data.requires_audio;
             _tiAudioMode = _tiHasEmbedded ? 'embedded' : 'midi';
             tiShowParsed(data, file.name);
         } catch (err) {
@@ -137,12 +139,39 @@ function tiShowParsed(data, filename) {
         // audio file switches the mode to 'autosync' and overrides embedded.
         audioToggle.classList.remove('hidden');
         tiSetAudioMode('embedded');
+    } else if (_tiRequiresAudio) {
+        // GP6/GP7/GP8 without embedded audio: MIDI synthesis is unsupported,
+        // so audio is required. Open the audio section immediately and disable
+        // the Build button until a file is attached.
+        banner.classList.add('hidden');
+        audioSection.classList.remove('hidden');
+        audioToggle.classList.add('hidden');
+        tiSetAudioMode('midi');
     } else {
         banner.classList.add('hidden');
         audioSection.classList.add('hidden');
         audioToggle.classList.remove('hidden');
         tiSetAudioMode('midi');
     }
+    tiUpdateBuildButton();
+}
+
+function tiUpdateBuildButton() {
+    const btn = document.querySelector('button[onclick="tiBuild()"]');
+    if (!btn) return;
+    const needsAudio = _tiRequiresAudio && _tiAudioMode !== 'autosync' && _tiAudioMode !== 'embedded';
+    btn.disabled = needsAudio;
+    btn.title = needsAudio ? 'Attach an audio file — MIDI synthesis is not supported for this format' : '';
+    btn.classList.toggle('opacity-40', needsAudio);
+    btn.classList.toggle('cursor-not-allowed', needsAudio);
+
+    // Adjust the audio section copy when audio is required (no "skip" option).
+    const hint = document.getElementById('ti-audio-hint');
+    const skip = document.getElementById('ti-skip-audio-btn');
+    if (hint) hint.textContent = _tiRequiresAudio
+        ? 'MIDI synthesis is not supported for GP6/GP7/GP8. Attach a matching audio file to continue.'
+        : 'Supply a matching audio file for auto-sync, or skip to generate MIDI audio';
+    if (skip) skip.classList.toggle('hidden', !!_tiRequiresAudio);
 }
 
 // ── Audio mode ───────────────────────────────────────────────────────────────
@@ -162,6 +191,7 @@ function tiSetAudioMode(mode) {
 
     // If user has an audio file loaded, clear it when switching to plain MIDI.
     if (mode === 'midi') tiClearAudio();
+    tiUpdateBuildButton();
 }
 
 function tiToggleAudioSection() {
@@ -314,15 +344,22 @@ async function tiBuild() {
             });
             const syncData = await syncResp.json();
             if (syncData.error) {
-                // Fallback to MIDI for this build only — don't abort, and
-                // don't disable autosync for future attempts.
-                setStage('Auto-sync failed, building with MIDI audio instead...', 20);
+                // Server couldn't save the audio at all (disk error, bad
+                // payload) — no file to use, fall back to MIDI for this run.
+                setStage('Audio upload failed, building with MIDI audio instead...', 20);
                 buildMode = 'midi';
             } else {
-                // Capture the sync result so the build can actually apply it.
+                // Capture the result so the build can use the real audio.
+                // sync_skipped means the file is kept but alignment failed;
+                // we still use the audio at offset 0 rather than falling back
+                // to MIDI synthesis.
                 _tiAudioOffset = syncData.audio_offset ?? 0;
                 _tiAudioTmpPath = syncData.audio_tmp_path || null;
-                setStage(`Synced: ${syncData.sync_point_count ?? 0} points, offset ${(syncData.audio_offset ?? 0).toFixed(3)}s`, 20);
+                if (syncData.sync_skipped) {
+                    setStage(`Using your audio without sync alignment — ${syncData.sync_skipped.split(';')[0]}`, 20);
+                } else {
+                    setStage(`Synced: ${syncData.sync_point_count ?? 0} points, offset ${(syncData.audio_offset ?? 0).toFixed(3)}s`, 20);
+                }
             }
         } catch (err) {
             setStage('Auto-sync failed, continuing with MIDI audio...', 20);
@@ -364,6 +401,8 @@ async function tiBuild() {
                     <p class="text-green-400 font-semibold mb-1">CDLC Created!</p>
                     <p class="text-sm text-gray-400">${esc(msg.filename)}</p>
                     <p class="text-xs text-gray-500 mt-1">Tracks: ${esc(msg.tracks)}</p>
+                    ${msg.lyrics_count > 0
+                        ? `<p class="text-xs text-accent/70 mt-1">✓ Lyrics extracted (${msg.lyrics_count} words)</p>` : ''}
                     ${msg.audio_mode === 'embedded' || msg.audio_mode === 'autosync'
                         ? `<p class="text-xs text-accent/70 mt-1">✓ Real audio used — no MIDI synthesis</p>` : ''}
                     <button onclick="tiReset()" class="mt-4 px-4 py-2 bg-dark-600 hover:bg-dark-500 rounded-xl text-sm text-gray-300 transition">Import Another</button>
@@ -391,6 +430,7 @@ function tiShowError(msg) {
 function tiReset() {
     _tiTmpPath = null;
     _tiHasEmbedded = false;
+    _tiRequiresAudio = false;
     // Clear audio payload + the loaded-file chip, then reset the mode.
     tiClearAudio();
     _tiAudioMode = 'midi';
