@@ -78,13 +78,14 @@ def _extract_lyrics_gp5(gp_path: str, track_idx: int,
                          audio_offset: float = 0.0) -> list | None:
     """Extract timestamped lyrics from a GP3/4/5 vocal track.
 
-    Walks the track's beats and collects beat.text syllables with their
-    calculated start time and duration.  Returns a list of
-    {"t": float, "d": float, "w": str} dicts (matching the sloppak
-    lyrics.json format), or None when no text is found or parsing fails.
+    Tries two sources in order:
+    1. beat.text — syllable annotations placed manually on each beat.
+    2. song.lyrics — Guitar Pro's dedicated lyrics editor, which stores a
+       block of text keyed to a track and a start measure.  Most GP vocal
+       tracks use this rather than beat.text.
 
-    Only works for GP3/GP4/GP5 (.gp3/.gp4/.gp5) — guitarpro.parse()
-    rejects .gpx/.gp, so callers should guard on the file extension.
+    Returns a list of {"t": float, "d": float, "w": str} dicts, or None.
+    Only works for GP3/4/5 — guitarpro.parse() rejects .gpx/.gp.
     """
     try:
         import guitarpro
@@ -93,16 +94,17 @@ def _extract_lyrics_gp5(gp_path: str, track_idx: int,
             return None
         track = song.tracks[track_idx]
 
-        words: list[dict] = []
+        # ── Build a beat-time map once (shared by both extraction paths) ──
+        # beat_times[measure_idx][beat_idx] = (start_secs, duration_secs)
+        bpm = float(song.tempo)
+        beat_times: list[list[tuple[float, float]]] = []
         current_time = 0.0
-        bpm = song.tempo  # initial BPM; updated per-beat via MixTableChange
-
         for header, measure in zip(song.measureHeaders, track.measures):
-            bpm = header.tempo.value
+            bpm = float(header.tempo.value)
+            measure_beats = []
             for beat in measure.voices[0].beats:
-                # Duration in quarter-note units, honouring dots and tuplets.
                 dur = beat.duration
-                qn = 4.0 / dur.value           # e.g. value=8 → 0.5 qn (eighth)
+                qn = 4.0 / dur.value
                 if dur.isDotted:
                     qn *= 1.5
                 elif getattr(dur, 'isDoubleDotted', False):
@@ -110,24 +112,55 @@ def _extract_lyrics_gp5(gp_path: str, track_idx: int,
                 tup = dur.tuplet
                 if tup.enters != tup.times:
                     qn *= tup.times / tup.enters
-
                 beat_secs = qn * 60.0 / bpm
-
-                # Mid-beat tempo change (MixTableChange) takes effect from the
-                # next beat, so update bpm after computing this beat's duration.
                 mtc = getattr(getattr(beat, 'effect', None), 'mixTableChange', None)
                 if mtc and getattr(getattr(mtc, 'tempo', None), 'value', 0) > 0:
-                    bpm = mtc.tempo.value
+                    bpm = float(mtc.tempo.value)
+                measure_beats.append((current_time, beat_secs))
+                current_time += beat_secs
+            beat_times.append(measure_beats)
 
+        # ── Path 1: beat.text annotations ──
+        words: list[dict] = []
+        for mi, (header, measure) in enumerate(zip(song.measureHeaders, track.measures)):
+            for bi, beat in enumerate(measure.voices[0].beats):
                 text = getattr(getattr(beat, 'text', None), 'value', '') or ''
-                if text:
+                if text and mi < len(beat_times) and bi < len(beat_times[mi]):
+                    t, d = beat_times[mi][bi]
                     words.append({
-                        "t": round(current_time + audio_offset, 3),
-                        "d": round(beat_secs, 3),
+                        "t": round(t + audio_offset, 3),
+                        "d": round(d, 3),
                         "w": text,
                     })
+        if words:
+            return words
 
-                current_time += beat_secs
+        # ── Path 2: song.lyrics (Guitar Pro dedicated lyrics editor) ──
+        lyr = getattr(song, 'lyrics', None)
+        if lyr is None:
+            return None
+        # trackChoice is 1-based in pyguitarpro; track_idx is 0-based.
+        if getattr(lyr, 'trackChoice', -1) - 1 != track_idx:
+            return None
+        lines = getattr(lyr, 'lines', None) or []
+        for line_text, start_measure in lines:
+            if not line_text:
+                continue
+            syllables = line_text.split()
+            # start_measure is 1-based measure number
+            mi = max(0, start_measure - 1)
+            syl_idx = 0
+            while syl_idx < len(syllables) and mi < len(beat_times):
+                for bi, (t, d) in enumerate(beat_times[mi]):
+                    if syl_idx >= len(syllables):
+                        break
+                    words.append({
+                        "t": round(t + audio_offset, 3),
+                        "d": round(d, 3),
+                        "w": syllables[syl_idx],
+                    })
+                    syl_idx += 1
+                mi += 1
 
         return words if words else None
     except Exception:
@@ -397,7 +430,15 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
                 for i, j in enumerate(range(0, len(ms), step))
             ]
 
-        for idx, (xml_path, name) in enumerate(zip(xml_paths, arrangement_names, strict=True)):
+        # Pair XMLs with names; if gp2rs produced fewer files than expected
+        # (it silently skips unsupported tracks) truncate names to match.
+        if len(xml_paths) != len(arrangement_names):
+            _log.warning(
+                "tab_import: xml count %d != arrangement count %d; truncating",
+                len(xml_paths), len(arrangement_names))
+            arrangement_names = arrangement_names[:len(xml_paths)]
+
+        for idx, (xml_path, name) in enumerate(zip(xml_paths, arrangement_names)):
             arr = parse_arrangement(xml_path)
             wire = arrangement_to_wire(arr)
 
