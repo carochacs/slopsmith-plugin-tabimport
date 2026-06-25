@@ -626,6 +626,108 @@ async def upload_tab(data: dict):
 
 
 
+@router.post("/youtube-audio")
+async def youtube_audio(data: dict):
+    """Download audio from a YouTube (or yt-dlp-supported) URL.
+
+    Returns a server-side tmp_path the build WebSocket can consume directly,
+    avoiding a second upload round-trip through /autosync.
+    """
+    url = (data or {}).get("url", "").strip()
+    if not url:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "No URL provided"}, status_code=400)
+
+    # Validate the GP session dir so we can drop the audio there — the build
+    # endpoint requires audio_tmp_path to share a parent with the GP file.
+    gp_tmp_path = (data or {}).get("gp_tmp_path", "")
+    gp_session_dir: Path | None = None
+    if gp_tmp_path:
+        gp_rp = _valid_gp_session_path(gp_tmp_path)
+        if gp_rp:
+            gp_session_dir = gp_rp.parent
+
+    start_time = data.get("start_time")
+    end_time = data.get("end_time")
+    try:
+        start_time = float(start_time) if start_time is not None else None
+    except (ValueError, TypeError):
+        start_time = None
+    try:
+        end_time = float(end_time) if end_time is not None else None
+    except (ValueError, TypeError):
+        end_time = None
+    if start_time is not None and end_time is not None and end_time <= start_time:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "end_time must be greater than start_time"}, status_code=400)
+
+    def _download():
+        import subprocess
+        # Use a private temp dir for the yt-dlp download step; final audio
+        # is moved into the GP session dir so the build endpoint accepts it.
+        tmp = Path(tempfile.mkdtemp(prefix=_SESSION_PREFIX))
+        out_template = str(tmp / "audio.%(ext)s")
+        try:
+            import yt_dlp
+            opts = {
+                "format": "bestaudio/best",
+                "outtmpl": out_template,
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }],
+                "quiet": True,
+                "no_warnings": True,
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get("title", "audio")
+
+            downloaded = next(
+                (f for f in tmp.iterdir() if f.suffix in (".mp3", ".m4a", ".ogg", ".wav")),
+                None,
+            )
+            if downloaded is None:
+                raise RuntimeError("No audio file produced by yt-dlp")
+
+            if start_time is not None or end_time is not None:
+                trimmed = tmp / ("trimmed" + downloaded.suffix)
+                cmd = ["ffmpeg", "-y", "-i", str(downloaded)]
+                if start_time is not None:
+                    cmd.extend(["-ss", str(start_time)])
+                if end_time is not None:
+                    dur = end_time - (start_time or 0)
+                    cmd.extend(["-t", str(dur)])
+                cmd.append(str(trimmed))
+                subprocess.run(cmd, check=True, capture_output=True)
+                downloaded.unlink(missing_ok=True)
+                downloaded = trimmed
+
+            # Move into the GP session dir so the build endpoint's path
+            # check (audio must share parent with the GP file) passes.
+            dest_dir = gp_session_dir if gp_session_dir else tmp
+            dest = dest_dir / ("yt_audio" + downloaded.suffix)
+            shutil.move(str(downloaded), dest)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+            return {"tmp_path": str(dest), "title": title}
+        except Exception:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(None, _download)
+        return result
+    except ImportError:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "yt-dlp is not installed on this server"}, status_code=500)
+    except Exception as e:
+        _log.exception("tab_import youtube-audio: download failed for %r", url)
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.post("/autosync")
 async def tab_autosync(data: dict):
     """Auto-sync a GP file to a user-supplied audio file.
