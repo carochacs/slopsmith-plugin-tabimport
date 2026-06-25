@@ -183,7 +183,7 @@ def _extract_sections_gp5(gp_path: str, audio_offset: float = 0.0) -> list | Non
                 sections.append({
                     "name": marker.title,
                     "number": len(sections) + 1,
-                    "startTime": round(current_time + audio_offset, 3),
+                    "time": round(current_time + audio_offset, 3),
                 })
             ts = header.timeSignature
             beats = ts.numerator * (4.0 / ts.denominator)
@@ -213,7 +213,7 @@ def _extract_sections_gpif(gp_path: str, audio_offset: float = 0.0) -> list | No
                     sections.append({
                         "name": text,
                         "number": len(sections) + 1,
-                        "startTime": round(current_time + audio_offset, 3),
+                        "time": round(current_time + audio_offset, 3),
                     })
             ts_text = mb.findtext('Time') or ''
             if '/' in ts_text:
@@ -225,6 +225,88 @@ def _extract_sections_gpif(gp_path: str, audio_offset: float = 0.0) -> list | No
         return sections or None
     except Exception:
         _log.debug("tab_import: GPIF section extraction failed", exc_info=True)
+        return None
+
+
+# General MIDI program → human-readable name for the programs GuitarPro uses
+# on electric guitar tracks. 0-indexed (GP stores 0-127).
+_GP_PROGRAM_NAMES: dict[int, str] = {
+    24: "Nylon Guitar",
+    25: "Steel Guitar",
+    26: "Jazz Guitar",
+    27: "Clean Guitar",
+    28: "Muted Guitar",
+    29: "Overdrive",
+    30: "Distortion",
+    31: "Harmonics",
+}
+
+
+def _extract_tones_gp5(gp_path: str, track_idx: int,
+                        audio_offset: float = 0.0) -> dict | None:
+    """Extract tone changes from MixTableChange.instrument events in a GP3/4/5 file.
+
+    Returns a tones dict with the same shape as Arrangement.tones:
+      {"base": str, "changes": [{"t": float, "name": str}], "definitions": []}
+    or None if no instrument-change events are found.
+    """
+    try:
+        import guitarpro
+        song = guitarpro.parse(gp_path)
+        if track_idx < 0 or track_idx >= len(song.tracks):
+            return None
+        track = song.tracks[track_idx]
+
+        # Starting instrument from the track channel
+        current_program = getattr(getattr(track, 'channel', None), 'instrument', None)
+        if current_program is None:
+            return None
+
+        def _name(prog: int) -> str:
+            return _GP_PROGRAM_NAMES.get(prog, f"Tone {prog + 1}")
+
+        base_name = _name(current_program)
+        changes: list[dict] = []
+
+        bpm = float(song.tempo)
+        current_time = 0.0
+
+        for header, measure in zip(song.measureHeaders, track.measures):
+            bpm = float(header.tempo.value)
+            for beat in measure.voices[0].beats:
+                mtc = getattr(getattr(beat, 'effect', None), 'mixTableChange', None)
+                if mtc is not None:
+                    instr = getattr(mtc, 'instrument', None)
+                    if instr is not None:
+                        new_prog = getattr(instr, 'value', None)
+                        if new_prog is not None and new_prog != current_program:
+                            changes.append({
+                                "t": round(current_time + audio_offset, 3),
+                                "name": _name(new_prog),
+                            })
+                            current_program = new_prog
+
+                # Update tempo if this beat carries a tempo MixTableChange
+                if mtc is not None and getattr(getattr(mtc, 'tempo', None), 'value', 0) > 0:
+                    bpm = float(mtc.tempo.value)
+
+                # Advance time by beat duration
+                dur = beat.duration
+                qn = 4.0 / dur.value
+                if dur.isDotted:
+                    qn *= 1.5
+                elif getattr(dur, 'isDoubleDotted', False):
+                    qn *= 1.75
+                tup = dur.tuplet
+                if tup.enters != tup.times:
+                    qn *= tup.times / tup.enters
+                current_time += qn * 60.0 / bpm
+
+        if not changes:
+            return None
+        return {"base": base_name, "changes": changes, "definitions": []}
+    except Exception:
+        _log.debug("tab_import: GP5 tone extraction failed", exc_info=True)
         return None
 
 
@@ -350,7 +432,8 @@ def _extract_lyrics_gpif(gp_path: str, vocals_track_idx: int,
 
 
 def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, album,
-                   output_path, lyrics=None, extra_sections=None, cover_path=None):
+                   output_path, lyrics=None, extra_sections=None, cover_path=None,
+                   tones_data=None):
     """Pack arrangement XMLs + audio into a .sloppak zip (manifest.yaml + JSONs + stem).
 
     extra_sections: fallback sections list (from GP markers) used when the
@@ -407,7 +490,9 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
                                 {
                                     "name": s.get("name", ""),
                                     "number": int(s.get("number", 0)),
-                                    "startTime": float(s.get("startTime", 0)),
+                                    # sloppak loader reads "time"; RS XML uses
+                                    # the camelCase "startTime" attribute here
+                                    "time": float(s.get("startTime", 0)),
                                 }
                                 for s in _sec.findall("section")
                             ]
@@ -426,7 +511,7 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             step = max(1, len(ms) // 10)
             shared_sections = [
                 {"name": f"Section {i + 1}", "number": i + 1,
-                 "startTime": ms[j]['time']}
+                 "time": ms[j]['time']}
                 for i, j in enumerate(range(0, len(ms), step))
             ]
 
@@ -448,6 +533,12 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
                 wire["ebeats"] = shared_ebeats
             if shared_sections:
                 wire["sections"] = shared_sections
+
+            # Inject MIDI-program-based tone data (from MixTableChange.instrument)
+            # when available and the arrangement carries no tone definitions.
+            if not arr.tones and tones_data:
+                wire["tones"] = tones_data
+
 
             raw_id = re.sub(r"[^a-z0-9]", "", name.lower()) or f"arr{idx}"
             count = used_ids.get(raw_id, 0)
@@ -1197,6 +1288,13 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                         and _cvp.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")):
                     _cover_path = str(_cvp)
 
+            # Extract overdrive/instrument tone data from MixTableChange for
+            # GP3/4/5 files.  Use the first selected track as the reference.
+            _tones_data = None
+            if Path(gp_path).suffix.lower() not in ('.gpx', '.gp') and auto_indices:
+                _primary_track_idx = auto_indices[0] - 1  # gp2rs is 1-based
+                _tones_data = _extract_tones_gp5(gp_path, _primary_track_idx, effective_offset)
+
             _build_sloppak(
                 xml_paths=xml_files,
                 arrangement_names=arr_names,
@@ -1208,6 +1306,7 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 lyrics=lyrics_data,
                 extra_sections=gp_sections,
                 cover_path=_cover_path,
+                tones_data=_tones_data,
             )
 
             # Cache metadata
