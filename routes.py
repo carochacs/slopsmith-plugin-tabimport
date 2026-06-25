@@ -449,6 +449,21 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             if shared_sections:
                 wire["sections"] = shared_sections
 
+            # GP files carry no tone definitions. Synthesise placeholder tone
+            # markers from section boundaries so the highway shows tone
+            # indicators at meaningful points (section names as tone labels).
+            # definitions is empty — no actual amp gear, just visual markers.
+            if not arr.tones and shared_sections:
+                _sec_sorted = sorted(shared_sections, key=lambda s: s.get("startTime", 0))
+                wire["tones"] = {
+                    "base": _sec_sorted[0]["name"] if _sec_sorted else "Tone_A",
+                    "changes": [
+                        {"t": round(s["startTime"], 3), "name": s["name"]}
+                        for s in _sec_sorted[1:]
+                    ],
+                    "definitions": [],
+                }
+
             raw_id = re.sub(r"[^a-z0-9]", "", name.lower()) or f"arr{idx}"
             count = used_ids.get(raw_id, 0)
             used_ids[raw_id] = count + 1
