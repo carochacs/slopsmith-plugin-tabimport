@@ -74,7 +74,8 @@ def _valid_gp_session_path(p: str):
 _SUPPORTED_EXTENSIONS = {'.gp3', '.gp4', '.gp5', '.gpx', '.gp'}
 
 
-def _extract_lyrics_gp5(gp_path: str, track_idx: int) -> list | None:
+def _extract_lyrics_gp5(gp_path: str, track_idx: int,
+                         audio_offset: float = 0.0) -> list | None:
     """Extract timestamped lyrics from a GP3/4/5 vocal track.
 
     Walks the track's beats and collects beat.text syllables with their
@@ -121,7 +122,7 @@ def _extract_lyrics_gp5(gp_path: str, track_idx: int) -> list | None:
                 text = getattr(getattr(beat, 'text', None), 'value', '') or ''
                 if text:
                     words.append({
-                        "t": round(current_time, 3),
+                        "t": round(current_time + audio_offset, 3),
                         "d": round(beat_secs, 3),
                         "w": text,
                     })
@@ -231,7 +232,8 @@ def _merge_rs_xmls(primary_xml: str, secondary_xmls: list) -> str:
     return primary_xml
 
 
-def _extract_lyrics_gpif(gp_path: str, vocals_track_idx: int) -> list | None:
+def _extract_lyrics_gpif(gp_path: str, vocals_track_idx: int,
+                          audio_offset: float = 0.0) -> list | None:
     """Extract timestamped lyrics from a GP6/GP7/GP8 vocal track via GPIF XML.
 
     Mirrors _extract_lyrics_gp5 but works on the GPIF beat graph instead of
@@ -301,7 +303,7 @@ def _extract_lyrics_gpif(gp_path: str, vocals_track_idx: int) -> list | None:
                 beat_secs = qn * 60.0 / bpm
                 if beat['text']:
                     words.append({
-                        "t": round(current_time, 3),
+                        "t": round(current_time + audio_offset, 3),
                         "d": round(beat_secs, 3),
                         "w": beat['text'],
                     })
@@ -383,6 +385,17 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
         # Fall back to GP-marker sections when the XML carries none.
         if not shared_sections and extra_sections:
             shared_sections = extra_sections
+
+        # Last resort: synthesise ~10 evenly-spaced sections from ebeat measure
+        # boundaries so navigation works even when the GP file has no markers.
+        if not shared_sections and shared_ebeats:
+            ms = [e for e in shared_ebeats if e.get('measure', -1) > 0]
+            step = max(1, len(ms) // 10)
+            shared_sections = [
+                {"name": f"Section {i + 1}", "number": i + 1,
+                 "startTime": ms[j]['time']}
+                for i, j in enumerate(range(0, len(ms), step))
+            ]
 
         for idx, (xml_path, name) in enumerate(zip(xml_paths, arrangement_names, strict=True)):
             arr = parse_arrangement(xml_path)
@@ -933,9 +946,11 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 ext = Path(gp_path).suffix.lower()
                 report("Extracting lyrics...", 55)
                 if ext in ('.gpx', '.gp'):
-                    lyrics_data = _extract_lyrics_gpif(gp_path, vocal_auto_indices[0])
+                    lyrics_data = _extract_lyrics_gpif(gp_path, vocal_auto_indices[0],
+                                                       effective_offset)
                 else:
-                    lyrics_data = _extract_lyrics_gp5(gp_path, vocal_auto_indices[0] - 1)
+                    lyrics_data = _extract_lyrics_gp5(gp_path, vocal_auto_indices[0] - 1,
+                                                      effective_offset)
 
             # Extract GP section markers to inject into the sloppak when gp2rs
             # produces no <sections> element (common for Songsterr exports).
