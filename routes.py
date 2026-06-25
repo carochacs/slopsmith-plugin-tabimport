@@ -350,7 +350,7 @@ def _extract_lyrics_gpif(gp_path: str, vocals_track_idx: int,
 
 
 def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, album,
-                   output_path, lyrics=None, extra_sections=None):
+                   output_path, lyrics=None, extra_sections=None, cover_path=None):
     """Pack arrangement XMLs + audio into a .sloppak zip (manifest.yaml + JSONs + stem).
 
     extra_sections: fallback sections list (from GP markers) used when the
@@ -485,6 +485,11 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             manifest["lyrics"] = "lyrics.json"
             manifest["lyrics_source"] = "gp"
 
+        if cover_path:
+            _cp = Path(cover_path)
+            if _cp.is_file():
+                manifest["cover"] = "cover" + _cp.suffix.lower()
+
         (work_dir / "manifest.yaml").write_text(
             yaml.dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
         )
@@ -497,6 +502,10 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
                 zf.write(f, f"stems/{f.name}")
             if lyrics is not None:
                 zf.write(work_dir / "lyrics.json", "lyrics.json")
+            if cover_path:
+                _cp = Path(cover_path)
+                if _cp.is_file():
+                    zf.write(_cp, "cover" + _cp.suffix.lower())
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -674,8 +683,8 @@ async def youtube_audio(data: dict):
                 "outtmpl": out_template,
                 "postprocessors": [{
                     "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
+                    "preferredcodec": "vorbis",
+                    "preferredquality": "5",
                 }],
                 "quiet": True,
                 "no_warnings": True,
@@ -685,7 +694,7 @@ async def youtube_audio(data: dict):
                 title = info.get("title", "audio")
 
             downloaded = next(
-                (f for f in tmp.iterdir() if f.suffix in (".mp3", ".m4a", ".ogg", ".wav")),
+                (f for f in tmp.iterdir() if f.suffix in (".ogg", ".mp3", ".m4a", ".wav")),
                 None,
             )
             if downloaded is None:
@@ -726,6 +735,40 @@ async def youtube_audio(data: dict):
         _log.exception("tab_import youtube-audio: download failed for %r", url)
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/upload-cover")
+async def upload_cover(data: dict):
+    """Save a base64-encoded cover image into the GP session dir.
+
+    Returns cover_path (server-side) that the build WebSocket can consume.
+    """
+    gp_tmp_path = (data or {}).get("gp_tmp_path", "")
+    b64 = (data or {}).get("data", "")
+    filename = (data or {}).get("filename", "cover.jpg")
+
+    if not gp_tmp_path or not b64:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Missing gp_tmp_path or data"}, status_code=400)
+
+    gp_rp = _valid_gp_session_path(gp_tmp_path)
+    if not gp_rp:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Invalid gp_tmp_path"}, status_code=400)
+
+    ext = Path(filename).suffix.lower()
+    if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+        ext = ".jpg"
+
+    try:
+        img_bytes = base64.b64decode(b64, validate=True)
+    except Exception:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Invalid image data"}, status_code=400)
+
+    dest = gp_rp.parent / f"cover{ext}"
+    dest.write_bytes(img_bytes)
+    return {"cover_path": str(dest)}
 
 
 @router.post("/autosync")
@@ -873,7 +916,7 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                        artist: str = "", album: str = "", tracks: str = "",
                        arrangements: str = "", audio_mode: str = "midi",
                        audio_offset: float = 0.0, audio_tmp_path: str = "",
-                       combine: int = 0):
+                       combine: int = 0, cover_path: str = ""):
     """Build CDLC from an uploaded GP file with progress.
 
     audio_mode selects the backing track:
@@ -1143,6 +1186,17 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
 
             output = str(dlc / f"{safe_t}_{safe_a}{_suffix}.sloppak")
             report("Packing sloppak...", 60)
+
+            # Validate cover_path: must be a regular file in the same session
+            # dir as the GP file, with an allowed image extension.
+            _cover_path = None
+            if cover_path:
+                _cvp = Path(cover_path).resolve()
+                _gp_dir = Path(gp_path).resolve().parent
+                if (_cvp.is_file() and _cvp.parent == _gp_dir
+                        and _cvp.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")):
+                    _cover_path = str(_cvp)
+
             _build_sloppak(
                 xml_paths=xml_files,
                 arrangement_names=arr_names,
@@ -1153,6 +1207,7 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 output_path=output,
                 lyrics=lyrics_data,
                 extra_sections=gp_sections,
+                cover_path=_cover_path,
             )
 
             # Cache metadata

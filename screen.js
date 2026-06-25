@@ -9,6 +9,7 @@ let _tiRequiresAudio = false; // true for GP6/GP7/GP8 — MIDI synthesis unsuppo
 let _tiAudioOffset = 0;      // seconds; from /autosync (autosync mode)
 let _tiAudioTmpPath = null;  // server-side path to the synced audio (autosync mode)
 let _tiAudioUrl = null;      // server-side URL for URL-downloaded audio (skips autosync upload)
+let _tiCoverPath = null;     // server-side path to the cover image (uploaded via /upload-cover)
 
 // HTML-escape helper — values from filenames / server responses are inserted
 // into innerHTML below, so they must be escaped to avoid breaking markup (and
@@ -83,6 +84,7 @@ async function tiHandleFile(file) {
             _tiHasEmbedded = !!data.has_embedded_audio;
             _tiRequiresAudio = !!data.requires_audio;
             _tiAudioMode = _tiHasEmbedded ? 'embedded' : 'midi';
+            tiClearCover();
             tiShowParsed(data, file.name);
         } catch (err) {
             dropzone.innerHTML = `<p class="text-red-400 text-sm">Upload failed: ${esc(String(err))}</p>
@@ -359,6 +361,48 @@ function tiClearAudio(revertMode = false) {
     }
 }
 
+// ── Cover image handling ─────────────────────────────────────────────────────
+
+async function tiHandleCover(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        const b64 = e.target.result.split(',')[1];
+        try {
+            const resp = await fetch('/api/plugins/tab_import/upload-cover', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ gp_tmp_path: _tiTmpPath, data: b64, filename: file.name }),
+            });
+            const json = await resp.json();
+            if (json.error) { alert('Cover upload failed: ' + json.error); return; }
+            _tiCoverPath = json.cover_path;
+            // Show preview
+            const preview = document.getElementById('ti-cover-preview');
+            if (preview) preview.innerHTML = `<img src="${e.target.result}" class="w-full h-full object-cover">`;
+            const lbl = document.getElementById('ti-cover-label');
+            if (lbl) lbl.textContent = file.name;
+            const clr = document.getElementById('ti-cover-clear');
+            if (clr) clr.classList.remove('hidden');
+        } catch (err) {
+            alert('Cover upload failed: ' + err.message);
+        }
+    };
+    reader.readAsDataURL(file);
+}
+
+function tiClearCover() {
+    _tiCoverPath = null;
+    const preview = document.getElementById('ti-cover-preview');
+    if (preview) preview.innerHTML = `<svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`;
+    const lbl = document.getElementById('ti-cover-label');
+    if (lbl) lbl.textContent = 'Choose image…';
+    const clr = document.getElementById('ti-cover-clear');
+    if (clr) clr.classList.add('hidden');
+    const inp = document.getElementById('ti-cover-input');
+    if (inp) inp.value = '';
+}
+
 // ── Build ────────────────────────────────────────────────────────────────────
 
 async function tiBuild() {
@@ -450,6 +494,9 @@ async function tiBuild() {
         params.set('audio_offset', String(_tiAudioOffset));
         params.set('audio_tmp_path', _tiAudioTmpPath);
     }
+    if (_tiCoverPath) {
+        params.set('cover_path', _tiCoverPath);
+    }
 
     // Match the backend router prefix (/api/plugins/tab_import) and use wss
     // when the page is served over HTTPS to avoid mixed-content failures.
@@ -504,6 +551,7 @@ function tiReset() {
     if (_cb) _cb.checked = false;
     // Clear audio payload + the loaded-file chip, then reset the mode.
     tiClearAudio();
+    tiClearCover();
     _tiAudioMode = 'midi';
 
     let dropzone = document.getElementById('ti-dropzone');
