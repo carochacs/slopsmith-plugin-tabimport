@@ -71,15 +71,7 @@
                     <button id="ti-skip-audio-btn" onclick="tiSkipAudio()" class="text-xs text-gray-500 hover:text-gray-300 transition">Skip — use MIDI</button>
                 </div>
 
-                <!-- Audio input mode toggle -->
-                <div class="flex gap-2 mb-2">
-                    <button onclick="tiSetAudioInputMode('file')" id="ti-audio-input-mode-file"
-                        class="px-3 py-1 bg-accent rounded text-xs text-white">Upload File</button>
-                    <button onclick="tiSetAudioInputMode('url')" id="ti-audio-input-mode-url"
-                        class="px-3 py-1 bg-dark-600 hover:bg-dark-500 rounded text-xs text-gray-300">YouTube URL</button>
-                </div>
-
-                <!-- Audio drop target (file mode) -->
+                <!-- Audio drop target -->
                 <div id="ti-audio-drop" role="button" tabindex="0" aria-label="Add audio file for auto-sync"
                      class="border border-dashed border-gray-700 rounded-xl p-6 text-center cursor-pointer transition hover:border-accent/40 focus:outline-none focus:border-accent/60"
                      onclick="document.getElementById('ti-audio-input').click()"
@@ -90,26 +82,6 @@
                     <p class="text-gray-400 text-xs">Drop MP3 / OGG / WAV / FLAC here, or click to browse</p>
                     <input type="file" id="ti-audio-input" accept=".mp3,.ogg,.wav,.flac,.m4a,.aac" class="hidden"
                            onchange="tiHandleAudioFile(this.files[0])">
-                </div>
-
-                <!-- YouTube URL input (url mode) -->
-                <div id="ti-audio-url-input" class="hidden">
-                    <input type="text" id="ti-audio-url" placeholder="https://youtube.com/watch?v=..."
-                        class="w-full bg-dark-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 outline-none focus:border-accent/50 mb-2">
-                    <div class="flex gap-2 mb-2">
-                        <div class="flex-1">
-                            <label class="text-xs text-gray-500 block mb-0.5">Start (seconds)</label>
-                            <input type="number" id="ti-audio-url-start" placeholder="0" min="0"
-                                class="w-full bg-dark-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 outline-none focus:border-accent/50">
-                        </div>
-                        <div class="flex-1">
-                            <label class="text-xs text-gray-500 block mb-0.5">End (seconds)</label>
-                            <input type="number" id="ti-audio-url-end" placeholder="Leave empty for full" min="0"
-                                class="w-full bg-dark-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 outline-none focus:border-accent/50">
-                        </div>
-                    </div>
-                    <button onclick="tiHandleAudioUrl()" class="px-4 py-1.5 bg-accent hover:bg-accent-light rounded text-xs text-white transition">Download Audio</button>
-                    <p id="ti-audio-url-status" class="text-xs text-gray-500 mt-2 hidden"></p>
                 </div>
 
                 <!-- Audio file loaded state -->

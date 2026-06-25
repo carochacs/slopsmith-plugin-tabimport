@@ -8,7 +8,6 @@ let _tiHasEmbedded = false;
 let _tiRequiresAudio = false; // true for GP6/GP7/GP8 — MIDI synthesis unsupported
 let _tiAudioOffset = 0;      // seconds; from /autosync (autosync mode)
 let _tiAudioTmpPath = null;  // server-side path to the synced audio (autosync mode)
-let _tiAudioUrl = null;      // server-side URL for URL-downloaded audio (skips autosync upload)
 
 // HTML-escape helper — values from filenames / server responses are inserted
 // into innerHTML below, so they must be escaped to avoid breaking markup (and
@@ -222,71 +221,6 @@ function tiSkipAudio() {
     tiSetAudioMode('midi');
 }
 
-// ── Audio input mode (file vs URL) ──────────────────────────────────────────
-
-let _tiAudioInputMode = 'file';
-
-function tiSetAudioInputMode(mode) {
-    _tiAudioInputMode = mode;
-    const fileBtn = document.getElementById('ti-audio-input-mode-file');
-    const urlBtn = document.getElementById('ti-audio-input-mode-url');
-    const drop = document.getElementById('ti-audio-drop');
-    const urlInput = document.getElementById('ti-audio-url-input');
-    const active = 'px-3 py-1 bg-accent rounded text-xs text-white';
-    const inactive = 'px-3 py-1 bg-dark-600 hover:bg-dark-500 rounded text-xs text-gray-300';
-    if (mode === 'file') {
-        fileBtn.className = active;
-        urlBtn.className = inactive;
-        drop.classList.remove('hidden');
-        urlInput.classList.add('hidden');
-    } else {
-        fileBtn.className = inactive;
-        urlBtn.className = active;
-        drop.classList.add('hidden');
-        urlInput.classList.remove('hidden');
-    }
-}
-
-async function tiHandleAudioUrl() {
-    const urlInput = document.getElementById('ti-audio-url');
-    const url = (urlInput && urlInput.value || '').trim();
-    if (!url) { alert('Please enter a URL.'); return; }
-
-    const startVal = (document.getElementById('ti-audio-url-start') || {}).value;
-    const endVal = (document.getElementById('ti-audio-url-end') || {}).value;
-    const statusEl = document.getElementById('ti-audio-url-status');
-
-    const params = { url, gp_tmp_path: _tiTmpPath };
-    const startSec = parseFloat(startVal) || 0;
-    if (endVal && parseFloat(endVal) > startSec) params.end_time = parseFloat(endVal);
-    if (startSec > 0) params.start_time = startSec;
-
-    if (statusEl) { statusEl.textContent = 'Downloading audio…'; statusEl.classList.remove('hidden'); }
-
-    try {
-        const resp = await fetch('/api/plugins/tab_import/youtube-audio', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(params),
-        });
-        const json = await resp.json();
-        if (json.error) {
-            if (statusEl) { statusEl.textContent = 'Error: ' + json.error; }
-            return;
-        }
-        // Store the server-side tmp path for the build; no base64/autosync upload needed
-        _tiAudioTmpPath = json.tmp_path;
-        _tiAudioOffset = 0;
-        _tiAudioFilename = (json.title || 'audio') + '.mp3';
-        tiSetAudioMode('autosync');
-        document.getElementById('ti-audio-name').textContent = _tiAudioFilename;
-        document.getElementById('ti-audio-loaded').classList.remove('hidden');
-        if (statusEl) statusEl.classList.add('hidden');
-    } catch (err) {
-        if (statusEl) { statusEl.textContent = 'Network error: ' + err.message; }
-    }
-}
-
 // ── Audio file handling ──────────────────────────────────────────────────────
 
 function tiHandleAudioDrop(e) {
@@ -348,7 +282,6 @@ function tiClearAudio(revertMode = false) {
     // default — embedded if the file has it, else MIDI — so a later build
     // doesn't send audio_mode=autosync with no audio attached.
     _tiAudioB64 = null;
-    _tiAudioUrl = null;
     _tiAudioFilename = null;
     _tiAudioOffset = 0;
     _tiAudioTmpPath = null;
