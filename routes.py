@@ -183,7 +183,7 @@ def _extract_sections_gp5(gp_path: str, audio_offset: float = 0.0) -> list | Non
                 sections.append({
                     "name": marker.title,
                     "number": len(sections) + 1,
-                    "startTime": round(current_time + audio_offset, 3),
+                    "time": round(current_time + audio_offset, 3),
                 })
             ts = header.timeSignature
             beats = ts.numerator * (4.0 / ts.denominator)
@@ -213,7 +213,7 @@ def _extract_sections_gpif(gp_path: str, audio_offset: float = 0.0) -> list | No
                     sections.append({
                         "name": text,
                         "number": len(sections) + 1,
-                        "startTime": round(current_time + audio_offset, 3),
+                        "time": round(current_time + audio_offset, 3),
                     })
             ts_text = mb.findtext('Time') or ''
             if '/' in ts_text:
@@ -407,7 +407,7 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
                                 {
                                     "name": s.get("name", ""),
                                     "number": int(s.get("number", 0)),
-                                    "startTime": float(s.get("startTime", 0)),
+                                    "time": float(s.get("startTime", 0)),
                                 }
                                 for s in _sec.findall("section")
                             ]
@@ -426,7 +426,7 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             step = max(1, len(ms) // 10)
             shared_sections = [
                 {"name": f"Section {i + 1}", "number": i + 1,
-                 "startTime": ms[j]['time']}
+                 "time": ms[j]['time']}
                 for i, j in enumerate(range(0, len(ms), step))
             ]
 
@@ -473,7 +473,6 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             "title": title,
             "artist": artist,
             "album": album,
-            "year": 0,
             "duration": duration,
             "stems": [{"id": "full", "file": f"stems/full{audio_ext}", "default": "on"}],
             "arrangements": arr_entries,
@@ -486,7 +485,7 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             manifest["lyrics_source"] = "gp"
 
         (work_dir / "manifest.yaml").write_text(
-            yaml.dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
+            yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
         )
 
         with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
