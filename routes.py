@@ -442,10 +442,10 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             arr = parse_arrangement(xml_path)
             wire = arrangement_to_wire(arr)
 
-            # Inject shared ebeats/sections into every arrangement so the
+            # Inject shared beats/sections into every arrangement so the
             # metronome and highway have rhythmic reference on all tracks.
             if shared_ebeats:
-                wire["ebeats"] = shared_ebeats
+                wire["beats"] = shared_ebeats
             if shared_sections:
                 wire["sections"] = shared_sections
 
@@ -482,7 +482,7 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
                 json.dumps(lyrics, ensure_ascii=False), encoding="utf-8"
             )
             manifest["lyrics"] = "lyrics.json"
-            manifest["lyrics_source"] = "gp"
+            manifest["lyrics_source"] = "xml"
 
         (work_dir / "manifest.yaml").write_text(
             yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
