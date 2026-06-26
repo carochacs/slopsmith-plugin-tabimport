@@ -453,7 +453,20 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
         stems_dir.mkdir()
 
         audio_ext = Path(audio_path).suffix
-        shutil.copy2(audio_path, stems_dir / f"full{audio_ext}")
+        if audio_ext.lower() != ".ogg":
+            import subprocess as _sp
+            _ogg_dest = stems_dir / "full.ogg"
+            _r = _sp.run(
+                ["ffmpeg", "-y", "-i", audio_path, "-q:a", "6", str(_ogg_dest)],
+                capture_output=True, timeout=120,
+            )
+            if _r.returncode == 0 and _ogg_dest.is_file():
+                audio_ext = ".ogg"
+                audio_path = str(_ogg_dest)
+            else:
+                shutil.copy2(audio_path, stems_dir / f"full{audio_ext}")
+        else:
+            shutil.copy2(audio_path, stems_dir / f"full{audio_ext}")
 
         # Read songLength from first XML for the manifest duration field.
         duration = 0.0
@@ -1187,21 +1200,42 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 non_vocal_auto = auto_indices
                 non_vocal_arr_names = arr_names
 
+            # For piano/keyboard tracks, assign LH/RH hand tags and normalize
+            # all "Keys N" names to "Keys" so the combine step merges them into
+            # one arrangement.  The first keys track is tagged 'L', the second
+            # 'R' — matching the typical GP convention of two piano staves.
+            _keys_indices = [ai for ai, n in zip(non_vocal_auto, non_vocal_arr_names)
+                             if n.lower().startswith("keys")]
+            _hand_map: dict[int, str] = {}
+            if len(_keys_indices) >= 2:
+                _hand_map[_keys_indices[0]] = 'L'
+                _hand_map[_keys_indices[1]] = 'R'
+                # Normalize all "Keys N" → "Keys" so combine merges them.
+                for ai in _keys_indices:
+                    name_map[ai] = "Keys"
+                non_vocal_arr_names = [name_map.get(ai, n)
+                                       for ai, n in zip(non_vocal_auto, non_vocal_arr_names)]
+
             report("Converting to Rocksmith XML...", 50)
             xml_dir = tempfile.mkdtemp()
             _register_cleanup(xml_dir)
             # Pass full name_map so gp2rs can resolve arrangement names for any
             # track index it knows about; only non_vocal_auto are converted.
-            xml_files = convert_file(gp_path, xml_dir,
-                                     track_indices=non_vocal_auto,
-                                     audio_offset=effective_offset,
-                                     arrangement_names=name_map)
+            _convert_kwargs: dict = dict(
+                track_indices=non_vocal_auto,
+                audio_offset=effective_offset,
+                arrangement_names=name_map,
+            )
+            if _hand_map and Path(gp_path).suffix.lower() not in ('.gpx', '.gp'):
+                _convert_kwargs["hand_map"] = _hand_map
+            xml_files = convert_file(gp_path, xml_dir, **_convert_kwargs)
             arr_names = non_vocal_arr_names
 
             # Combine same-name arrangements when requested.  Track indices
             # with the same arrangement name are merged into one XML so that
             # Songsterr-style tone-change tracks become a single playable part.
-            if combine:
+            # Piano LH/RH tracks are always merged (hand_map signals this).
+            if combine or _hand_map:
                 from collections import OrderedDict
                 groups: dict[str, list] = OrderedDict()
                 for xml_f, nm in zip(xml_files, arr_names):
