@@ -549,7 +549,7 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
 
             # Inject MIDI-program-based tone data (from MixTableChange.instrument)
             # when available and the arrangement carries no tone definitions.
-            if not arr.tones and tones_data:
+            if not getattr(arr, 'tones', None) and tones_data:
                 wire["tones"] = tones_data
 
 
