@@ -10,27 +10,36 @@ A plugin for [Slopsmith](https://github.com/byrongamatos/slopsmith) that lets yo
 - **MIDI audio** — generates audio from the tab using FluidSynth
 - **Real-time progress** — shows build progress with stage descriptions
 
+## Requirements
+
+MIDI audio generation requires **FluidSynth** and a soundfont (`.sf2`) file.
+
+- **Slopsmith Desktop** — place a `.sf2` file in the soundfonts folder for your platform:
+  - Windows: `%APPDATA%\Slopsmith\soundfonts\`
+  - macOS: `~/Library/Application Support/slopsmith-desktop/soundfonts/`
+  - Linux: `~/.config/slopsmith-desktop/soundfonts/`
+- **Docker** — FluidSynth is bundled in the Docker image; place a `.sf2` file in your mounted config volume at `soundfonts/`.
+
+A free soundfont such as [GeneralUser GS](https://schristiancollins.com/generaluser.php) is sufficient. If no soundfont is found, the build fails at the audio generation step. You can skip audio entirely by providing your own audio file to sync instead.
+
 ## Installation
 
+**Docker (web version)**
 ```bash
 cd /path/to/slopsmith/plugins
 git clone https://github.com/byrongamatos/slopsmith-plugin-tabimport.git tab_import
 docker compose restart
 ```
 
+**Desktop app** — clone into the platform plugins directory and restart the app:
+
+| Platform | Plugins directory |
+|----------|-------------------|
+| Windows  | `%APPDATA%\slopsmith-desktop\plugins\` |
+| macOS    | `~/Library/Application Support/slopsmith-desktop/plugins/` |
+| Linux    | `~/.config/slopsmith-desktop/plugins/` |
+
 The "Import Tab" link will appear in the navigation bar.
-
-## Requirements
-
-MIDI audio generation requires FluidSynth and a soundfont file. On Windows, Slopsmith Desktop looks for a `.sf2` file in:
-
-```
-%APPDATA%\Slopsmith\soundfonts\
-```
-
-If no soundfont is found, the build will fail at the audio generation step. A free soundfont such as [GeneralUser GS](https://schristiancollins.com/generaluser.php) placed in that folder is sufficient.
-
-This can be bypassed by providing an audio file to sync.
 
 ## How It Works
 
