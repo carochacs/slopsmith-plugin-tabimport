@@ -59,5 +59,5 @@ GP6 and GP7 are not supported (they use a different binary format).
 
 ## License
 
-MIT
+[MIT](LICENSE.txt)
 
