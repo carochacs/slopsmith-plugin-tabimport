@@ -1,5 +1,8 @@
 // Tab Import plugin — screen.js
 
+(function () {
+'use strict';
+
 let _tiTmpPath = null;
 let _tiAudioB64 = null;
 let _tiAudioFilename = null;
@@ -587,3 +590,15 @@ function tiReset() {
     // prior autosync attempt doesn't persist into the next import.
     tiResetAudioDropUI();
 }
+
+// Expose functions called from inline HTML event handlers
+window.tiSetAudioMode    = tiSetAudioMode;
+window.tiSkipAudio       = tiSkipAudio;
+window.tiHandleAudioDrop = tiHandleAudioDrop;
+window.tiHandleAudioFile = tiHandleAudioFile;
+window.tiClearAudio      = tiClearAudio;
+window.tiBuild           = tiBuild;
+window.tiToggleAudioSection = tiToggleAudioSection;
+window.tiReset           = tiReset;
+
+})();
