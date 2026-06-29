@@ -586,4 +586,81 @@ function tiReset() {
     // Reset the audio drop zone too, so a stale "Loading…"/file row from a
     // prior autosync attempt doesn't persist into the next import.
     tiResetAudioDropUI();
+    tiLoadPianoPairs();
+}
+
+// ── Piano LH/RH merge utility ────────────────────────────────────────────────
+
+async function tiLoadPianoPairs() {
+    const section = document.getElementById('ti-piano-merge-section');
+    const container = document.getElementById('ti-piano-pairs');
+    if (!section || !container) return;
+    section.classList.add('hidden');
+    container.innerHTML = '';
+    try {
+        const res = await fetch('/api/plugins/tab_import/piano-pairs');
+        const data = await res.json();
+        const pairs = data.pairs || [];
+        if (!pairs.length) return;
+        section.classList.remove('hidden');
+        container.innerHTML = pairs.map((p, i) => `
+            <div class="flex items-center gap-3 bg-dark-700 border border-gray-800 rounded-xl px-4 py-3" id="ti-pair-row-${i}">
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm text-white truncate">${esc(p.title)}${p.artist ? ' <span class="text-gray-500">·</span> ' + esc(p.artist) : ''}</div>
+                    <div class="text-xs text-gray-500 mt-0.5">${esc(p.rh_name)} + ${esc(p.lh_name)} → <span class="text-gray-300">${esc(_tiMergedName(p.rh_name))}</span></div>
+                </div>
+                <button onclick="tiMergePair(${i})" id="ti-pair-btn-${i}"
+                    class="shrink-0 px-4 py-1.5 bg-accent hover:bg-accent-light rounded-lg text-xs font-semibold text-white transition">
+                    Merge
+                </button>
+                <span id="ti-pair-status-${i}" class="text-xs text-gray-500 hidden"></span>
+            </div>
+        `).join('');
+        // Attach pair data to rows for the merge handler.
+        pairs.forEach((p, i) => {
+            document.getElementById('ti-pair-row-' + i)._pairData = p;
+        });
+    } catch (_) {
+        // Non-fatal — just don't show the section.
+    }
+}
+
+function _tiMergedName(rhName) {
+    return (rhName || '').replace(/\s*\brh\b\s*$/i, '').trim() || rhName;
+}
+
+async function tiMergePair(idx) {
+    const row = document.getElementById('ti-pair-row-' + idx);
+    const btn = document.getElementById('ti-pair-btn-' + idx);
+    const status = document.getElementById('ti-pair-status-' + idx);
+    if (!row || !btn) return;
+    const p = row._pairData;
+    btn.disabled = true;
+    btn.textContent = 'Merging…';
+    status.textContent = '';
+    status.classList.add('hidden');
+    try {
+        const res = await fetch('/api/plugins/tab_import/merge-piano-hands', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: p.filename, rh_file: p.rh_file, lh_file: p.lh_file }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+            btn.textContent = 'Done';
+            btn.className = 'shrink-0 px-4 py-1.5 bg-green-700 rounded-lg text-xs font-semibold text-white cursor-default';
+            status.textContent = '✓ Merged as "' + (data.merged_name || '') + '"';
+            status.classList.remove('hidden');
+        } else {
+            btn.disabled = false;
+            btn.textContent = 'Merge';
+            status.textContent = data.error || 'Merge failed.';
+            status.classList.remove('hidden');
+        }
+    } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Merge';
+        status.textContent = 'Network error.';
+        status.classList.remove('hidden');
+    }
 }

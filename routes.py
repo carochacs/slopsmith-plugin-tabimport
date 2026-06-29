@@ -614,6 +614,244 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def _find_sloppak_piano_pairs(dlc_dir: Path) -> list[dict]:
+    """Scan dlc_dir for sloppaks that have two Keys arrangements named LH/RH."""
+    import json
+    import zipfile as _zf
+    import yaml
+
+    results = []
+    try:
+        candidates = list(dlc_dir.iterdir())
+    except OSError:
+        return results
+
+    for path in candidates:
+        if not path.name.lower().endswith(".sloppak"):
+            continue
+        try:
+            if path.is_file():
+                with _zf.ZipFile(str(path), "r") as zf:
+                    for name in ("manifest.yaml", "manifest.yml"):
+                        if name in zf.namelist():
+                            manifest = yaml.safe_load(zf.read(name).decode("utf-8"))
+                            break
+                    else:
+                        continue
+            else:
+                mf = path / "manifest.yaml"
+                if not mf.exists():
+                    mf = path / "manifest.yml"
+                if not mf.exists():
+                    continue
+                manifest = yaml.safe_load(mf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        if not isinstance(manifest, dict):
+            continue
+
+        arrs = manifest.get("arrangements") or []
+        keys_arrs = [
+            a for a in arrs
+            if isinstance(a, dict) and any(
+                kw in (a.get("name") or "").lower()
+                for kw in ("piano", "keys", "keyboard")
+            )
+        ]
+
+        for a in keys_arrs:
+            name_a = (a.get("name") or "").strip().lower()
+            if not re.search(r"\brh\b", name_a):
+                continue
+            stem = re.sub(r"\s*\brh\b\s*$", "", name_a).strip()
+            for b in keys_arrs:
+                if b is a:
+                    continue
+                name_b = (b.get("name") or "").strip().lower()
+                if not re.search(r"\blh\b", name_b):
+                    continue
+                stem_b = re.sub(r"\s*\blh\b\s*$", "", name_b).strip()
+                if stem_b == stem:
+                    results.append({
+                        "filename": path.name,
+                        "title": manifest.get("title", path.stem),
+                        "artist": manifest.get("artist", ""),
+                        "rh_name": a.get("name"),
+                        "lh_name": b.get("name"),
+                        "rh_file": a.get("file"),
+                        "lh_file": b.get("file"),
+                    })
+                    break
+
+    return results
+
+
+def _do_merge_piano_hands(
+    filename: str,
+    rh_file: str,
+    lh_file: str,
+    dlc_dir: Path,
+) -> dict:
+    """Merge two Keys arrangements (LH + RH) in a sloppak in-place.
+
+    Tags every note from the RH arrangement as hand='R' and every note from
+    the LH arrangement as hand='L', deduplicates simultaneous same-pitch
+    notes (keeping the longer sustain), and writes the merged arrangement
+    back. The manifest is updated to drop the LH entry and rename the RH
+    entry to the shared stem (e.g. "Piano RH" → "Piano").
+    """
+    import json
+    import zipfile as _zf
+    import yaml
+    import sloppak as _sloppak_mod
+    from song import arrangement_from_wire, arrangement_to_wire
+
+    path = dlc_dir / filename
+    is_zip = path.is_file()
+
+    # ── Read source data ──────────────────────────────────────────────────────
+    if is_zip:
+        with _zf.ZipFile(str(path), "r") as zf:
+            manifest_text = zf.read("manifest.yaml").decode("utf-8")
+            rh_data = json.loads(zf.read(rh_file))
+            lh_data = json.loads(zf.read(lh_file))
+    else:
+        manifest_text = (path / "manifest.yaml").read_text(encoding="utf-8")
+        rh_data = json.loads((path / rh_file).read_text(encoding="utf-8"))
+        lh_data = json.loads((path / lh_file).read_text(encoding="utf-8"))
+
+    rh_arr = arrangement_from_wire(rh_data)
+    lh_arr = arrangement_from_wire(lh_data)
+
+    # ── Tag RH notes / chord-notes ────────────────────────────────────────────
+    for n in rh_arr.notes:
+        n.hand = "R"
+    for c in rh_arr.chords:
+        for cn in c.notes:
+            cn.hand = "R"
+
+    # ── Tag LH notes / chord-notes ────────────────────────────────────────────
+    for n in lh_arr.notes:
+        n.hand = "L"
+    for c in lh_arr.chords:
+        for cn in c.notes:
+            cn.hand = "L"
+
+    # ── Merge notes (dedup by rounded time+string+fret, keep longer sustain) ──
+    seen: dict[tuple, object] = {}
+    for n in rh_arr.notes:
+        seen.setdefault((round(n.time, 3), n.string, n.fret), n)
+    # Also seed from RH chord notes so an identical LH single note is deduped.
+    for c in rh_arr.chords:
+        for cn in c.notes:
+            seen.setdefault((round(cn.time, 3), cn.string, cn.fret), cn)
+    for n in lh_arr.notes:
+        k = (round(n.time, 3), n.string, n.fret)
+        existing = seen.get(k)
+        if existing is None:
+            rh_arr.notes.append(n)
+            seen[k] = n
+        elif n.sustain > existing.sustain:  # type: ignore[union-attr]
+            existing.sustain = n.sustain  # type: ignore[union-attr]
+    rh_arr.notes.sort(key=lambda n: (n.time, n.string))
+
+    # ── Merge chords (append LH chords not already covered by a RH chord) ────
+    rh_chord_times = {round(c.time, 3) for c in rh_arr.chords}
+    for c in lh_arr.chords:
+        if round(c.time, 3) not in rh_chord_times:
+            rh_arr.chords.append(c)
+    rh_arr.chords.sort(key=lambda c: c.time)
+
+    # ── Rename merged arrangement (strip " RH" suffix) ────────────────────────
+    merged_name = re.sub(r"\s*\brh\b\s*$", "", rh_arr.name, flags=re.IGNORECASE).strip() or rh_arr.name
+    rh_arr.name = merged_name
+
+    merged_json = json.dumps(arrangement_to_wire(rh_arr), ensure_ascii=False)
+
+    # ── Update manifest ────────────────────────────────────────────────────────
+    manifest = yaml.safe_load(manifest_text)
+    new_arrs = []
+    for entry in (manifest.get("arrangements") or []):
+        if not isinstance(entry, dict):
+            new_arrs.append(entry)
+            continue
+        f = entry.get("file", "")
+        if f == lh_file:
+            continue  # drop LH entry
+        e = dict(entry)
+        if f == rh_file:
+            e["name"] = merged_name
+        new_arrs.append(e)
+    manifest["arrangements"] = new_arrs
+    new_manifest_text = yaml.dump(manifest, allow_unicode=True, sort_keys=False)
+
+    # ── Write back ────────────────────────────────────────────────────────────
+    if is_zip:
+        tmp = path.with_suffix(".sloppak.tmp")
+        try:
+            with _zf.ZipFile(str(path), "r") as zin, \
+                 _zf.ZipFile(str(tmp), "w", _zf.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    n = item.filename
+                    if n in ("manifest.yaml", "manifest.yml"):
+                        zout.writestr("manifest.yaml", new_manifest_text)
+                    elif n == lh_file:
+                        pass  # drop LH arrangement
+                    elif n == rh_file:
+                        zout.writestr(rh_file, merged_json)
+                    else:
+                        zout.writestr(item, zin.read(n))
+            tmp.replace(path)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+        # Invalidate unpack cache so next playback re-extracts from the new zip.
+        with _sloppak_mod._source_lock:
+            _sloppak_mod._source_cache.pop(filename, None)
+    else:
+        (path / "manifest.yaml").write_text(new_manifest_text, encoding="utf-8")
+        (path / rh_file).write_text(merged_json, encoding="utf-8")
+        lh_path = path / lh_file
+        if lh_path.exists():
+            lh_path.unlink()
+
+    return {"ok": True, "merged_name": merged_name}
+
+
+@router.get("/piano-pairs")
+async def get_piano_pairs():
+    """Return sloppaks in the DLC dir that have mergeable LH/RH Keys arrangements."""
+    try:
+        pairs = _find_sloppak_piano_pairs(_get_dlc_dir())
+        return {"pairs": pairs}
+    except Exception:
+        _log.exception("tab_import piano-pairs scan failed")
+        return {"pairs": [], "error": "Scan failed — see server logs."}
+
+
+@router.post("/merge-piano-hands")
+async def merge_piano_hands(data: dict):
+    """Merge two Keys arrangements (LH + RH) in a sloppak in-place."""
+    filename = data.get("filename", "")
+    rh_file = data.get("rh_file", "")
+    lh_file = data.get("lh_file", "")
+    if not filename or not rh_file or not lh_file:
+        return {"error": "Missing required fields."}
+    # Validate that rh_file and lh_file look like safe relative paths.
+    for p in (rh_file, lh_file):
+        if ".." in p or p.startswith("/") or "\\" in p:
+            return {"error": "Invalid file path."}
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, _do_merge_piano_hands, filename, rh_file, lh_file, _get_dlc_dir()
+        )
+        return result
+    except Exception:
+        _log.exception("tab_import merge-piano-hands failed for %r", filename)
+        return {"error": "Merge failed — see server logs."}
+
+
 def setup(app, context):
     global _get_dlc_dir, _extract_meta, _meta_db
     _get_dlc_dir = context["get_dlc_dir"]
