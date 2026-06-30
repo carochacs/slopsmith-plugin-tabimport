@@ -33,12 +33,12 @@ Status legend: `DONE` (shipped in v1.0.0), `OPEN` (not yet implemented), `[P]` (
 - [DONE] Sanitise forbidden chars.
 - [DONE] `_midi_p.psarc` suffix.
 - [DONE] `(MIDI)` suffix on title.
-- [OPEN] [P] Collision strategy (Q5) — clobber today; option for `_2`/`_3`.
+- [DONE] [P] Collision strategy (Q5) — if the output `.sloppak` already exists, tries `_2`, `_3`, … up to `_99` before writing.
 
 ## Cross-cutting
 - [DONE] `_meta_db.put` called on success (best-effort).
 - [DONE] PSARC dropped into `get_dlc_dir()`.
 - [DONE] [P] Cleanup of upload `tmp_path` on abnormal WS disconnect (Q6) — `WebSocketDisconnect` is caught and execution falls through to the `finally` block in `ws_build_tab`, which awaits the executor and removes all `_cleanup_dirs` (including the GP session dir queued at line 1125).
 - [DONE] [P] Detect missing FluidSynth / soundfont at startup (Q7) — `_check_midi_deps(log)` called from `setup()`; logs actionable `WARNING` with install instructions if `fluidsynth` not on PATH or no `.sf2` found.
-- [OPEN] Unit tests around `auto_select_tracks` heuristics on synthetic inputs.
+- [DONE] Unit tests around `auto_select_tracks` heuristics — `tests/test_auto_select_tracks.py`, 17 cases, mocks `list_tracks` and `guitarpro` so no fixture files needed.
 - [OPEN] Multipart upload alternative for very large GP files (Q2).
