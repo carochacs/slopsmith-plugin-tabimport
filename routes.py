@@ -1342,7 +1342,14 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
             safe_t = re.sub(r'[<>:"/\\|?*]', '_', t_str)
             safe_a = re.sub(r'[<>:"/\\|?*]', '_', a_str)
 
-            output = str(dlc / f"{safe_t}_{safe_a}{_suffix}.sloppak")
+            _base = dlc / f"{safe_t}_{safe_a}{_suffix}.sloppak"
+            output = str(_base)
+            if _base.exists():
+                for _n in range(2, 100):
+                    _candidate = dlc / f"{safe_t}_{safe_a}{_suffix}_{_n}.sloppak"
+                    if not _candidate.exists():
+                        output = str(_candidate)
+                        break
             report("Packing sloppak...", 60)
 
             # Validate cover_path: must be a regular file in the same session
