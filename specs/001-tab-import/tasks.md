@@ -38,7 +38,7 @@ Status legend: `DONE` (shipped in v1.0.0), `OPEN` (not yet implemented), `[P]` (
 ## Cross-cutting
 - [DONE] `_meta_db.put` called on success (best-effort).
 - [DONE] PSARC dropped into `get_dlc_dir()`.
-- [OPEN] [P] Cleanup of upload `tmp_path` on abnormal WS disconnect (Q6).
-- [OPEN] [P] Detect missing FluidSynth / soundfont at startup (Q7).
+- [DONE] [P] Cleanup of upload `tmp_path` on abnormal WS disconnect (Q6) — `WebSocketDisconnect` is caught and execution falls through to the `finally` block in `ws_build_tab`, which awaits the executor and removes all `_cleanup_dirs` (including the GP session dir queued at line 1125).
+- [DONE] [P] Detect missing FluidSynth / soundfont at startup (Q7) — `_check_midi_deps(log)` called from `setup()`; logs actionable `WARNING` with install instructions if `fluidsynth` not on PATH or no `.sf2` found.
 - [OPEN] Unit tests around `auto_select_tracks` heuristics on synthetic inputs.
 - [OPEN] Multipart upload alternative for very large GP files (Q2).

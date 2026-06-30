@@ -614,11 +614,44 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def _check_midi_deps(log) -> None:
+    """Warn at startup if fluidsynth or a soundfont is missing.
+
+    MIDI synthesis is optional (users can supply their own audio via
+    auto-sync or embedded GP8 audio), but it's the default fallback and
+    silent failures confuse users.  We log actionable warnings here rather
+    than crashing — the plugin still loads so real-audio imports keep working.
+    """
+    if not shutil.which("fluidsynth"):
+        log.warning(
+            "tab_import: fluidsynth not found on PATH — MIDI audio synthesis "
+            "will fail at build time. Install fluidsynth and ensure it is on "
+            "PATH (Debian/Ubuntu: sudo apt install fluidsynth; "
+            "Arch: sudo pacman -S fluidsynth; macOS: brew install fluid-synth)."
+        )
+    else:
+        try:
+            from gp2midi import _find_soundfont
+            if not _find_soundfont():
+                log.warning(
+                    "tab_import: fluidsynth is installed but no soundfont (.sf2) "
+                    "was found — MIDI audio synthesis will fail at build time. "
+                    "Install a soundfont (Debian/Ubuntu: sudo apt install "
+                    "fluid-soundfont-gm; Arch: sudo pacman -S soundfont-fluid) "
+                    "or set the SLOPSMITH_SOUNDFONT env var to the path of an "
+                    "existing .sf2 file."
+                )
+        except Exception:
+            pass  # gp2midi unavailable in the environment — skip the check
+
+
 def setup(app, context):
     global _get_dlc_dir, _extract_meta, _meta_db
     _get_dlc_dir = context["get_dlc_dir"]
     _extract_meta = context["extract_meta"]
     _meta_db = context["meta_db"]
+    log = context["log"]
+    _check_midi_deps(log)
     app.include_router(router)
 
 
