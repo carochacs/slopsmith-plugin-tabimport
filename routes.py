@@ -313,35 +313,80 @@ def _extract_tones_gp5(gp_path: str, track_idx: int,
 def _merge_rs_xmls(primary_xml: str, secondary_xmls: list) -> str:
     """Merge note-bearing elements from secondary RS XMLs into the primary XML.
 
-    Combines <notes>, <chords>, and <handShapes> child elements from each
-    secondary into the primary and re-sorts them by time.  The primary file is
-    overwritten in place; its path is returned for convenience.
+    Combines notes, chords, anchors, and handShapes from each secondary's
+    first difficulty level into the primary's first difficulty level,
+    remaps chordTemplate references, re-sorts by time, and updates count
+    attributes.  The primary file is overwritten in place; its path is
+    returned for convenience.
     """
     import xml.etree.ElementTree as ET
 
     tree = ET.parse(primary_xml)
     root = tree.getroot()
 
+    # gp2rs nests notes/chords/anchors/handShapes inside <levels><level> —
+    # they are NOT direct children of the root element.
+    pri_level = root.find('levels/level')
+    if pri_level is None:
+        tree.write(primary_xml, encoding='unicode', xml_declaration=False)
+        return primary_xml
+
+    pri_ct_el = root.find('chordTemplates')
+
+    def _ct_key(el):
+        return tuple(sorted(el.items()))
+
+    pri_ct_keys = [_ct_key(ct) for ct in (pri_ct_el if pri_ct_el is not None else [])]
+
     for sec_xml in secondary_xmls:
         try:
             sec_root = ET.parse(sec_xml).getroot()
-            for tag in ('notes', 'chords', 'handShapes'):
-                sec_cont = sec_root.find(tag)
+            sec_level = sec_root.find('levels/level')
+            if sec_level is None:
+                continue
+
+            # Build chordId remap: secondary template index → primary index.
+            # Identical templates (same attributes) are deduplicated; new ones
+            # are appended so the primary chordTemplates stays self-consistent.
+            chord_id_remap: dict[int, int] = {}
+            sec_ct_el = sec_root.find('chordTemplates')
+            if sec_ct_el is not None and pri_ct_el is not None:
+                for i, ct in enumerate(sec_ct_el):
+                    key = _ct_key(ct)
+                    if key in pri_ct_keys:
+                        chord_id_remap[i] = pri_ct_keys.index(key)
+                    else:
+                        new_idx = len(pri_ct_keys)
+                        pri_ct_keys.append(key)
+                        pri_ct_el.append(ct)
+                        chord_id_remap[i] = new_idx
+
+            for tag in ('notes', 'chords', 'anchors', 'handShapes'):
+                sec_cont = sec_level.find(tag)
                 if sec_cont is None or len(sec_cont) == 0:
                     continue
-                pri_cont = root.find(tag)
+                pri_cont = pri_level.find(tag)
                 if pri_cont is None:
-                    root.append(sec_cont)
-                else:
-                    for child in list(sec_cont):
-                        pri_cont.append(child)
+                    pri_level.append(sec_cont)
+                    continue
+                for child in list(sec_cont):
+                    if chord_id_remap and child.get('chordId') is not None:
+                        orig = int(child.get('chordId'))
+                        child.set('chordId', str(chord_id_remap.get(orig, orig)))
+                    pri_cont.append(child)
         except Exception:
             _log.debug("tab_import: XML merge skipped for %s", sec_xml, exc_info=True)
 
-    for tag in ('notes', 'chords', 'handShapes'):
-        cont = root.find(tag)
-        if cont is not None and len(cont) > 0:
-            cont[:] = sorted(cont, key=lambda e: float(e.get('time', 0)))
+    # Re-sort merged containers by time and update count attributes.
+    for tag in ('notes', 'chords', 'anchors', 'handShapes'):
+        cont = pri_level.find(tag)
+        if cont is not None:
+            if len(cont) > 0:
+                cont[:] = sorted(cont, key=lambda e: float(e.get('time', 0)))
+            cont.set('count', str(len(cont)))
+
+    if pri_ct_el is not None:
+        pri_ct_el.set('count', str(len(pri_ct_el)))
 
     tree.write(primary_xml, encoding='unicode', xml_declaration=False)
     return primary_xml
