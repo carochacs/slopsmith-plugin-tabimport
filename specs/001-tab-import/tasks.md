@@ -41,4 +41,6 @@ Status legend: `DONE` (shipped in v1.0.0), `OPEN` (not yet implemented), `[P]` (
 - [DONE] [P] Cleanup of upload `tmp_path` on abnormal WS disconnect (Q6) — `WebSocketDisconnect` is caught and execution falls through to the `finally` block in `ws_build_tab`, which awaits the executor and removes all `_cleanup_dirs` (including the GP session dir queued at line 1125).
 - [DONE] [P] Detect missing FluidSynth / soundfont at startup (Q7) — `_check_midi_deps(log)` called from `setup()`; logs actionable `WARNING` with install instructions if `fluidsynth` not on PATH or no `.sf2` found.
 - [DONE] Unit tests around `auto_select_tracks` heuristics — `tests/test_auto_select_tracks.py`, 17 cases, mocks `list_tracks` and `guitarpro` so no fixture files needed.
-- [OPEN] Multipart upload alternative for very large GP files (Q2).
+- [DONE/N/A] Multipart upload alternative for very large GP files (Q2) —
+  resolved as not needed: GP files are small; base64 overhead is negligible.
+  Revisit if users report OOM on exceptionally large bundles (see clarify.md Q2).
