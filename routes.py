@@ -1261,6 +1261,38 @@ async def ws_build_tab(websocket: WebSocket, tmp_path: str, title: str = "",
                 non_vocal_arr_names = [name_map.get(ai, n)
                                        for ai, n in zip(non_vocal_auto, non_vocal_arr_names)]
 
+            # For GPX/GP files, gp2rs_gpx.convert_file runs _find_piano_pairs
+            # internally, consuming (removing) LH piano tracks whose names match
+            # a paired RH track (e.g. "Piano RH"/"Piano LH"). The merged LH
+            # notes are folded into the RH XML, so the returned xml_files list
+            # has fewer entries than non_vocal_auto. Pre-filter here so
+            # non_vocal_arr_names stays aligned with the actual xml_files count.
+            if Path(gp_path).suffix.lower() in ('.gpx', '.gp') and _keys_indices:
+                _tnames = {t['index']: t['name'] for t in list_tracks(gp_path)}
+                _keys_set = set(_keys_indices)
+                _lh_consumed_gpx: set[int] = set()
+                for _ai in non_vocal_auto:
+                    if _ai not in _keys_set:
+                        continue
+                    _low_ai = _tnames.get(_ai, '').lower()
+                    if not re.search(r'\brh\b', _low_ai):
+                        continue
+                    _stem_ai = re.sub(r'\s*\brh\b\s*', '', _low_ai).strip()
+                    for _aj in non_vocal_auto:
+                        if _aj == _ai or _aj in _lh_consumed_gpx or _aj not in _keys_set:
+                            continue
+                        _low_aj = _tnames.get(_aj, '').lower()
+                        if re.search(r'\blh\b', _low_aj):
+                            _stem_aj = re.sub(r'\s*\blh\b\s*', '', _low_aj).strip()
+                            if _stem_aj == _stem_ai:
+                                _lh_consumed_gpx.add(_aj)
+                                break
+                if _lh_consumed_gpx:
+                    _keep_k = [k for k, _ai in enumerate(non_vocal_auto)
+                                if _ai not in _lh_consumed_gpx]
+                    non_vocal_auto = [non_vocal_auto[k] for k in _keep_k]
+                    non_vocal_arr_names = [non_vocal_arr_names[k] for k in _keep_k]
+
             report("Converting to Rocksmith XML...", 50)
             xml_dir = tempfile.mkdtemp()
             _register_cleanup(xml_dir)
