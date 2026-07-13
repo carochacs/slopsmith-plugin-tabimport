@@ -1,5 +1,8 @@
 // Tab Import plugin — screen.js
 
+(function () {
+'use strict';
+
 let _tiTmpPath = null;
 let _tiAudioB64 = null;
 let _tiAudioFilename = null;
@@ -664,3 +667,15 @@ async function tiMergePair(idx) {
         status.classList.remove('hidden');
     }
 }
+
+// Expose functions called from inline HTML event handlers
+window.tiSetAudioMode    = tiSetAudioMode;
+window.tiSkipAudio       = tiSkipAudio;
+window.tiHandleAudioDrop = tiHandleAudioDrop;
+window.tiHandleAudioFile = tiHandleAudioFile;
+window.tiClearAudio      = tiClearAudio;
+window.tiBuild           = tiBuild;
+window.tiToggleAudioSection = tiToggleAudioSection;
+window.tiReset           = tiReset;
+
+})();
