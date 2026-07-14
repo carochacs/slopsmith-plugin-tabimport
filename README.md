@@ -1,6 +1,6 @@
 # Slopsmith Plugin: Import Tab
 
-A plugin for [Slopsmith](https://github.com/byrongamatos/slopsmith) that lets you drag and drop Guitar Pro files directly into the browser to create playable CDLC.
+A plugin for [Slopsmith](https://github.com/carochacs/slopsmith) that lets you drag and drop Guitar Pro files directly into the browser to create playable CDLC.
 
 ## Features
 
@@ -27,7 +27,7 @@ A free soundfont such as [GeneralUser GS](https://schristiancollins.com/generalu
 **Docker (web version)**
 ```bash
 cd /path/to/slopsmith/plugins
-git clone https://github.com/byrongamatos/slopsmith-plugin-tabimport.git tab_import
+git clone https://github.com/carochacs/slopsmith-plugin-tabimport.git tab_import
 docker compose restart
 ```
 
