@@ -599,10 +599,10 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             arr = parse_arrangement(xml_path)
             wire = arrangement_to_wire(arr)
 
-            # Inject shared ebeats/sections into every arrangement so the
+            # Inject shared beats/sections into every arrangement so the
             # metronome and highway have rhythmic reference on all tracks.
             if shared_ebeats:
-                wire["ebeats"] = shared_ebeats
+                wire["beats"] = shared_ebeats
             if shared_sections:
                 wire["sections"] = shared_sections
 
@@ -636,7 +636,6 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
             "title": title,
             "artist": artist,
             "album": album,
-            "year": 0,
             "duration": duration,
             "stems": [{"id": "full", "file": f"stems/full{audio_ext}", "default": "on"}],
             "arrangements": arr_entries,
@@ -646,7 +645,7 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
                 json.dumps(lyrics, ensure_ascii=False), encoding="utf-8"
             )
             manifest["lyrics"] = "lyrics.json"
-            manifest["lyrics_source"] = "gp"
+            manifest["lyrics_source"] = "xml"
 
         if cover_path:
             _cp = Path(cover_path)
@@ -654,7 +653,7 @@ def _build_sloppak(xml_paths, arrangement_names, audio_path, title, artist, albu
                 manifest["cover"] = "cover" + _cp.suffix.lower()
 
         (work_dir / "manifest.yaml").write_text(
-            yaml.dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
+            yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
         )
 
         with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
