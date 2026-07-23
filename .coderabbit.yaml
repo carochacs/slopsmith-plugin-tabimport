@@ -1,0 +1,60 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit config for the Slopsmith Import Tab plugin. This plugin
+# follows the standard Slopsmith plugin backend/frontend contract
+# documented in the core slopsmith repo's CLAUDE.md — see that for the
+# full `setup(app, context)` / `load_sibling` / screen.js conventions.
+
+language: en-US
+early_access: false
+
+tone_instructions: >-
+  This repo is developed by a solo maintainer working with Claude Code
+  agents. Prioritize correctness and input-validation bugs (this plugin
+  parses untrusted user-uploaded Guitar Pro files) over style nits.
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_filters:
+    - "!**/*.min.js"
+    - "!**/node_modules/**"
+  path_instructions:
+    - path: "routes.py"
+      instructions: |
+        FastAPI backend for a Slopsmith plugin — exports
+        `setup(app, context)`. All output goes through `context["log"]`
+        (already the pattern used throughout this file); a bare `print()`
+        IS a real bug to flag. Sibling modules must be loaded via
+        `context["load_sibling"](name)`, not a bare `import` (avoids
+        `sys.modules` collisions with same-named files in other plugins).
+        Minimal docstrings are the house style — don't request them on
+        self-explanatory functions. Errors during MIDI/FluidSynth audio
+        generation are expected to degrade gracefully (build continues
+        without audio, or fails with a clear stage message) rather than
+        crash the whole build — that's intentional, not missing error
+        handling, unless the exception is fully swallowed with no user-facing
+        signal.
+    - path: "screen.js"
+      instructions: |
+        Vanilla JS IIFE, loaded as a plain `<script>` tag — no bundler, no
+        framework, no build step. Don't suggest converting drag-and-drop
+        handling or progress polling into a framework component.
+    - path: "tests/**"
+      instructions: |
+        pytest-based backend tests. Don't request docstrings on test
+        functions; descriptive test names already document intent.
+    - path: "**/*.md"
+      instructions: |
+        Documentation. Don't request docstring coverage in code based on
+        gaps here.
+
+chat:
+  auto_reply: true
